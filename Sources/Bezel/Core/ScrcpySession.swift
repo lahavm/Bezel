@@ -31,6 +31,7 @@ final class ScrcpySession: @unchecked Sendable {
     private let adb: ADB
     private let device: Device
     private let scid = Int.random(in: 1...0x7FFF_FFFF)
+    private var scidHex: String { String(format: "%08x", scid) }
     private var process: Process?
     private var listenFD: Int32 = -1
     private var connectionFD: Int32 = -1
@@ -40,6 +41,10 @@ final class ScrcpySession: @unchecked Sendable {
     init(device: Device, adb: ADB) {
         self.device = device
         self.adb = adb
+    }
+
+    private var socketName: String {
+        "scrcpy_\(scidHex)"
     }
 
     private var jarURL: URL {
@@ -57,15 +62,18 @@ final class ScrcpySession: @unchecked Sendable {
             throw SessionError.server("scrcpy-server.jar missing from the app bundle.")
         }
 
+        Log.write("session: push \(jarURL.lastPathComponent) to \(Self.remoteJar)")
         try await adb.push(device.serial, local: jarURL, remote: Self.remoteJar)
 
         let listener = try makeListener()
+        Log.write("session: listening on 127.0.0.1:\(listener.port) scid=\(scid) socket=\(socketName)")
         listenFD = listener.fd
         try await adb.reverse(
             device.serial,
-            remote: "localabstract:scrcpy_\(scid)",
+            remote: "localabstract:\(socketName)",
             localPort: listener.port
         )
+        Log.write("session: reverse tunnel ready")
 
         process = try adb.launchServer(
             device.serial,
@@ -73,15 +81,18 @@ final class ScrcpySession: @unchecked Sendable {
             arguments: serverArguments(settings: settings)
         )
 
+        Log.write("session: server started, waiting for connection")
         let fd = try await accept(listener.fd, timeout: 20)
         connectionFD = fd
         markRunning(true)
+        Log.write("session: connected")
 
         // First four bytes on the video socket: codec id.
         let codec = try readExactly(fd, 4)
         guard let codecName = String(data: codec, encoding: .ascii), codecName.hasPrefix("h26") else {
             throw SessionError.server("Unsupported codec: \(String(decoding: codec, as: UTF8.self))")
         }
+        Log.write("session: codec \(codecName)")
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.readLoop(fd)
@@ -101,7 +112,7 @@ final class ScrcpySession: @unchecked Sendable {
         process?.terminate()
         process = nil
         let serial = device.serial
-        let remote = "localabstract:scrcpy_\(scid)"
+        let remote = "localabstract:\(socketName)"
         Task { [adb] in
             await adb.removeReverse(serial, remote: remote)
             await adb.remove(serial, remote: Self.remoteJar)
@@ -113,7 +124,7 @@ final class ScrcpySession: @unchecked Sendable {
     private func serverArguments(settings: Settings) -> [String] {
         var arguments = [
             Self.serverVersion,
-            "scid=\(scid)",
+            "scid=\(scidHex)",
             "log_level=error",
             "video=true",
             "audio=false",
@@ -139,6 +150,7 @@ final class ScrcpySession: @unchecked Sendable {
 
     private func readLoop(_ fd: Int32) {
         var format: CMVideoFormatDescription?
+        var samples = 0
 
         while isRunning {
             guard let header = try? readExactly(fd, 12) else { break }
@@ -147,6 +159,7 @@ final class ScrcpySession: @unchecked Sendable {
             if bytes[0] & 0x80 != 0 {
                 let width = Int(bytes[4]) << 24 | Int(bytes[5]) << 16 | Int(bytes[6]) << 8 | Int(bytes[7])
                 let height = Int(bytes[8]) << 24 | Int(bytes[9]) << 16 | Int(bytes[10]) << 8 | Int(bytes[11])
+                Log.write("session: video size \(width)x\(height)")
                 onSize?(width, height)
                 continue
             }
@@ -161,15 +174,21 @@ final class ScrcpySession: @unchecked Sendable {
 
             if isConfig {
                 format = H264Frames.formatDescription(fromConfig: payload)
+                Log.write("session: config packet \(payload.count) bytes, format=\(format != nil)")
             } else if let format,
                       let avcc = H264Frames.avcc(from: payload),
                       let sample = H264Frames.sampleBuffer(avcc: avcc, format: format, ptsMicros: pts) {
+                samples += 1
+                if samples == 1 || samples % 120 == 0 {
+                    Log.write("session: samples=\(samples) pts=\(pts)")
+                }
                 onSample?(sample)
             }
         }
 
         let wasRunning = isRunning
         markRunning(false)
+        Log.write("session: read loop ended after \(samples) samples")
         if wasRunning { onEnd?("Stream ended.") }
     }
 

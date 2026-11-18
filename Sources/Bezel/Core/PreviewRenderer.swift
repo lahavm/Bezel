@@ -17,15 +17,17 @@ final class PreviewRenderer {
     }
 
     func enqueue(_ sample: CMSampleBuffer) {
-        if renderer.status == .failed {
+        if let error = renderer.error {
+            Log.write("renderer: failed \(error.localizedDescription)")
             renderer.flush(removingDisplayedImage: true, completionHandler: nil)
         }
         renderer.enqueue(sample)
 
         frameCount += 1
         let now = Date()
-        if now.timeIntervalSince(lastTick) >= 1 {
+        if now.timeIntervalSince(lastTick) >= 2 {
             framesPerSecond = Int(Double(frameCount) / now.timeIntervalSince(lastTick))
+            Log.write("renderer: \(framesPerSecond) fps status=\(renderer.status.rawValue)")
             frameCount = 0
             lastTick = now
         }

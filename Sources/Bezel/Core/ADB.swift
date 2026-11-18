@@ -29,8 +29,6 @@ enum ADBError: LocalizedError {
 /// Thin wrapper around the bundled adb binary.
 /// Uses a private key store and server port so it never touches the user's ~/.android.
 final class ADB: @unchecked Sendable {
-    static let serverPort = 5038
-
     let adbURL: URL
     private let userHome: URL
 
@@ -64,8 +62,9 @@ final class ADB: @unchecked Sendable {
 
     private func environment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
+        // Private key store when we start the daemon. If another adb server is
+        // already running on 5037, the client reuses it and its keys.
         env["ANDROID_USER_HOME"] = userHome.path
-        env["ANDROID_ADB_SERVER_PORT"] = String(Self.serverPort)
         return env
     }
 
@@ -82,23 +81,33 @@ final class ADB: @unchecked Sendable {
             throw ADBError.toolNotFound
         }
         let process = process(arguments)
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
         process.standardInput = FileHandle.nullDevice
+
+        // Redirect to a temp file instead of a pipe: an adb daemon forked by a
+        // client inherits the descriptor, which keeps a pipe open forever.
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bezel-adb-\(UUID().uuidString).txt")
+        FileManager.default.createFile(atPath: outputURL.path, contents: nil)
+        guard let handle = try? FileHandle(forWritingTo: outputURL) else {
+            throw ADBError.failed("Could not create a temporary output file.")
+        }
+        process.standardOutput = handle
+        process.standardError = handle
+        defer { try? FileManager.default.removeItem(at: outputURL) }
 
         return try await withCheckedThrowingContinuation { continuation in
             do {
                 try process.run()
             } catch {
+                try? handle.close()
                 continuation.resume(throwing: ADBError.failed(error.localizedDescription))
                 return
             }
-            DispatchQueue.global(qos: .userInitiated).async {
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
+            process.terminationHandler = { finished in
+                try? handle.close()
+                let data = (try? Data(contentsOf: outputURL)) ?? Data()
                 let text = String(decoding: data, as: UTF8.self)
-                if process.terminationStatus == 0 {
+                if finished.terminationStatus == 0 {
                     continuation.resume(returning: text)
                 } else {
                     continuation.resume(throwing: ADBError.failed(text))
@@ -108,7 +117,28 @@ final class ADB: @unchecked Sendable {
     }
 
     func startServer() async throws {
-        _ = try? await run(["start-server"])
+        guard FileManager.default.isExecutableFile(atPath: adbURL.path) else {
+            throw ADBError.toolNotFound
+        }
+        let process = process(["start-server"])
+        // The daemon inherits the pipe, so a captured stdout would never close.
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            process.terminationHandler = { finished in
+                if finished.terminationStatus == 0 {
+                    continuation.resume()
+                } else {
+                    continuation.resume(throwing: ADBError.failed("adb start-server failed"))
+                }
+            }
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: ADBError.failed(error.localizedDescription))
+            }
+        }
     }
 
     func devices() async throws -> [Device] {
@@ -169,9 +199,17 @@ final class ADB: @unchecked Sendable {
     func launchServer(_ serial: String, classpath: String, arguments: [String]) throws -> Process {
         let command = "CLASSPATH=\(classpath) app_process / com.genymobile.scrcpy.Server " + arguments.joined(separator: " ")
         let process = process(["-s", serial, "shell", command])
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
         process.standardInput = FileHandle.nullDevice
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            for line in text.split(separator: "\n") {
+                Log.write("server: \(line)")
+            }
+        }
         try process.run()
         return process
     }

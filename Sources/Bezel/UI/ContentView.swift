@@ -1,4 +1,5 @@
 import AVFoundation
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -76,6 +77,23 @@ struct ContentView: View {
 
             Spacer()
 
+            if state.isRunning {
+                Button {
+                    if state.isRecording {
+                        Task { await state.stopRecording() }
+                    } else {
+                        do { try state.startRecording() } catch {
+                            state.errorMessage = error.localizedDescription
+                        }
+                    }
+                } label: {
+                    Label(state.isRecording ? "Stop recording" : "Record",
+                          systemImage: state.isRecording ? "stop.fill" : "record.circle")
+                }
+                .buttonStyle(.bordered)
+                .tint(state.isRecording ? .red : nil)
+            }
+
             Button(state.isRunning ? "Stop" : "Connect") {
                 if state.isRunning {
                     state.disconnect()
@@ -135,6 +153,11 @@ struct ContentView: View {
         }
     }
 
+    private func clock(from start: Date, to now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(start)))
+        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+
     private func inspector(state: AppState) -> some View {
         @Bindable var state = state
 
@@ -175,7 +198,27 @@ struct ContentView: View {
             .disabled(state.isRunning)
 
             Section("Recording") {
-                Text("Passthrough MP4 recording lands in the next phase.")
+                if state.isRecording, let start = state.recordStart {
+                    TimelineView(.periodic(from: start, by: 1)) { context in
+                        Label(clock(from: start, to: context.date), systemImage: "record.circle.fill")
+                            .foregroundStyle(.red)
+                            .font(.callout.monospacedDigit())
+                    }
+                }
+
+                if let url = state.lastRecording, !state.isRecording {
+                    Button {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    } label: {
+                        Label(url.lastPathComponent, systemImage: "film")
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .buttonStyle(.plain)
+                    .help(url.path)
+                }
+
+                Text("Saved to Movies/Bezel. Video passes through without re-encoding.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
