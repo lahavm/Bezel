@@ -8,6 +8,23 @@ Status: mirroring, phone screen/camera recording, phone audio, Mac microphone
 and (external) Mac camera recording work. Touch/keyboard control is not
 implemented.
 
+## Features
+
+- Mirror the phone screen or its camera over USB, switching between them without
+  reconnecting. Native refresh rate, or 30/60 fps; 720p, 1080p, 1440p, 4K or
+  native resolution; H.264 or HEVC.
+- Record the phone with no re-encoding, with phone audio or the phone mic.
+- Record the Mac camera (1080p or 4K) and the Mac microphone.
+- "Both" turns the Mac camera into a corner overlay in the phone video. Turn on
+  "Separate files" to get two files instead.
+- The Mac microphone is mixed into the same MP4 as one normal audio track.
+- Screenshots at the mirrored resolution.
+- Full-screen preview with the controls hidden.
+- Choose the recordings folder (defaults to `~/Movies/Bezel`).
+
+Shortcuts: `⌘R` start/stop recording, `⌘S` screenshot, `⌃⌘F` full screen,
+`⌘↩` connect/stop.
+
 Camera notes:
 - The phone camera works regardless of the Mac's lid state.
 - The built-in Mac camera is unavailable while the lid is closed; an external
@@ -40,8 +57,9 @@ from the repository root).
 - A fixed set of adb commands: `getprop`, `push`, `reverse`, `rm`, and starting
   the scrcpy server. No installs, no file access, no input injection.
 - The camera is activated only in camera mode; Android shows its indicator.
-- Recording writes to `~/Movies/Bezel`. Choosing "Both" writes one file for the
-  phone and one for the Mac camera; the microphone is an extra `.m4a`.
+- Recording writes to the chosen folder (`~/Movies/Bezel` by default).
+- The app decodes the stream locally for the preview; a screenshot is that
+  displayed frame, so it works in screen and camera mode alike.
 
 The app reuses an adb server that is already running (Android Studio, Homebrew).
 If none is running, it starts the bundled adb with its own key store under
@@ -54,7 +72,7 @@ no telemetry and no network access.
 ```
 Sources/Bezel/
   App/        AppState, entry point
-  Core/       ADB wrapper, scrcpy session, h.264 parser, preview renderer
+  Core/       ADB wrapper, scrcpy session, parsers, preview, recorders, PiP/mix
   UI/         SwiftUI window and preview view
 Resources/    Info.plist
 Vendor/       adb + scrcpy-server (downloaded, not committed)
@@ -64,7 +82,8 @@ Scripts/      fetch-vendor.sh, build-app.sh
 ## Known limitations
 
 - No touch, keyboard or clipboard control (viewing and recording only).
-- "Both" records two files rather than compositing a picture-in-picture video.
+- The picture-in-picture overlay is written after recording stops, so a very
+  long take takes a moment to finish.
 - 4K60 is limited by the phone's encoder and the fanless Mac; the frame-rate
   readout shows what actually arrives.
 - Some phones expose only their main and front cameras, so ultrawide or tele

@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 import Observation
 import SwiftUI
@@ -10,7 +11,7 @@ final class AppState {
     let renderer = PreviewRenderer()
     let recorder = Recorder()
     let webcamRecorder = WebcamRecorder()
-    let micRecorder = MicRecorder()
+    let snapshotter = Snapshotter()
 
     var devices: [Device] = []
     var selectedSerial: String?
@@ -26,7 +27,8 @@ final class AppState {
     var recordStart: Date?
     var lastRecording: URL?
     var lastWebcamRecording: URL?
-    var lastMicRecording: URL?
+    var lastScreenshot: URL?
+    var isComposing = false
     var cameras: [CameraInfo] = []
 
     private var session: ScrcpySession?
@@ -170,34 +172,38 @@ final class AppState {
         status = "Connecting…"
 
         let session = ScrcpySession(device: device, adb: adb)
-        session.onSample = { [weak self] sample in
+        session.onSample = { [weak self, weak session] sample in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, let session, self.session === session else { return }
                 self.renderer.enqueue(sample)
                 if self.isRecording {
                     self.recorder.append(sample)
                 }
             }
         }
-        session.onAudioConfig = { [weak self] asc in
+        session.onAudioConfig = { [weak self, weak session] asc in
             Task { @MainActor in
-                guard let self, self.isRecording else { return }
+                guard let self, let session, self.session === session, self.isRecording else { return }
                 self.recorder.configureAudio(asc: asc)
             }
         }
-        session.onAudioFrame = { [weak self] frame, pts in
+        session.onAudioFrame = { [weak self, weak session] frame, pts in
             Task { @MainActor in
-                guard let self, self.isRecording else { return }
+                guard let self, let session, self.session === session, self.isRecording else { return }
                 self.recorder.appendAudio(frame: frame, ptsMicros: pts)
             }
         }
-        session.onSize = { [weak self] width, height in
+        session.onSize = { [weak self, weak session] width, height in
             Task { @MainActor in
-                self?.frameSize = CGSize(width: width, height: height)
+                guard let self, let session, self.session === session else { return }
+                self.frameSize = CGSize(width: width, height: height)
             }
         }
-        session.onEnd = { [weak self] message in
-            Task { @MainActor in self?.finish(message: message) }
+        session.onEnd = { [weak self, weak session] message in
+            Task { @MainActor in
+                guard let self, let session, self.session === session else { return }
+                self.finish(message: message)
+            }
         }
         self.session = session
 
@@ -215,6 +221,7 @@ final class AppState {
                     await self.stopRecording()
                 }
             }
+
         } catch {
             session.stop()
             self.session = nil
@@ -255,13 +262,71 @@ final class AppState {
         process.waitUntilExit()
     }
 
+    func toggleRecording() {
+        Task {
+            if isRecording {
+                await stopRecording()
+            } else {
+                do { try await startRecording() } catch {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func takeScreenshot() {
+        guard let buffer = renderer.displayedPixelBuffer() else {
+            errorMessage = "There is no frame on screen yet."
+            return
+        }
+        let directory = settings.outputDirectory
+        Task.detached { [snapshotter] in
+            do {
+                let url = try snapshotter.save(buffer, into: directory)
+                await MainActor.run { self.lastScreenshot = url }
+            } catch {
+                let message = error.localizedDescription
+                await MainActor.run {
+                    self.errorMessage = message
+                    Log.write("screenshot: failed \(message)")
+                }
+            }
+        }
+    }
+
+    /// Reconnects with the current settings, so source, lens and quality can
+    /// change without pressing Stop and Connect.
+    func restartSession() {
+        guard isRunning, !isConnecting, !isRecording else { return }
+        Task {
+            session?.stop()
+            session = nil
+            isRunning = false
+            renderer.flush()
+            frameSize = .zero
+            // Give the phone a moment to release the camera/encoder.
+            try? await Task.sleep(for: .milliseconds(600))
+            await connect()
+        }
+    }
+
     func startRecording() async throws {
         guard !isRecording else { return }
         if settings.target.recordsPhone, !isRunning {
             throw RecorderError.writer("Connect the phone before recording it.")
         }
+        if settings.target.recordsWebcam, !settings.target.recordsPhone, !settings.macMic, false {
+            throw RecorderError.writer("Nothing is selected for recording.")
+        }
 
+        let directory = settings.outputDirectory
         var startedURLs: [URL] = []
+
+        if settings.macMic {
+            guard await AVCaptureDevice.requestAccess(for: .audio) else {
+                throw RecorderError.writer("Microphone access is off. Enable it in System Settings › Privacy & Security › Microphone.")
+            }
+        }
 
         if settings.target.recordsPhone {
             // The audio format has to be registered before the first video frame
@@ -271,9 +336,12 @@ final class AppState {
                     try? await Task.sleep(for: .milliseconds(50))
                 }
             }
-            let url = try recorder.start(fps: settings.fps)
+            let url = try recorder.start(fps: settings.fps, directory: directory)
             if let asc = session?.audioConfig {
                 recorder.configureAudio(asc: asc)
+            }
+            if settings.macMic {
+                try recorder.startMicrophone()
             }
             lastRecording = url
             startedURLs.append(url)
@@ -282,7 +350,12 @@ final class AppState {
 
         if settings.target.recordsWebcam {
             do {
-                let url = try await webcamRecorder.start(resolution: settings.webcamResolution, fps: settings.fps)
+                let url = try await webcamRecorder.start(
+                    resolution: settings.webcamResolution,
+                    fps: max(30, settings.fps),
+                    directory: directory,
+                    microphone: settings.macMic && !settings.target.recordsPhone
+                )
                 lastWebcamRecording = url
                 startedURLs.append(url)
             } catch {
@@ -290,17 +363,6 @@ final class AppState {
                     Task { _ = try? await recorder.finish() }
                 }
                 throw error
-            }
-        }
-
-        if settings.macMic {
-            do {
-                let url = try await micRecorder.start()
-                lastMicRecording = url
-                startedURLs.append(url)
-            } catch {
-                Log.write("mic: failed \(error.localizedDescription)")
-                if errorMessage == nil { errorMessage = error.localizedDescription }
             }
         }
 
@@ -314,11 +376,14 @@ final class AppState {
         isRecording = false
         recordStart = nil
         var saved: [URL] = []
+        var phoneURL: URL?
+        var webcamURL: URL?
 
         if settings.target.recordsPhone {
             do {
                 let url = try await recorder.finish()
                 lastRecording = url
+                phoneURL = url
                 saved.append(url)
                 Log.write("recording: saved \(url.path)")
             } catch {
@@ -331,6 +396,7 @@ final class AppState {
             do {
                 let url = try await webcamRecorder.finish()
                 lastWebcamRecording = url
+                webcamURL = url
                 saved.append(url)
                 Log.write("recording: saved webcam \(url.path)")
             } catch {
@@ -340,13 +406,45 @@ final class AppState {
             webcamRecorder.stopSession()
         }
 
-        if settings.macMic {
-            if let url = micRecorder.stop() {
-                lastMicRecording = url
-                saved.append(url)
-                Log.write("mic: saved \(url.path)")
+        if settings.macMic, let phoneURL {
+            isComposing = true
+            status = "Mixing microphone…"
+            let scratch = phoneURL.deletingLastPathComponent()
+                .appendingPathComponent(".bezel-mix-\(UUID().uuidString).mp4")
+            do {
+                _ = try await AudioMixer.mix(phoneURL, output: scratch)
+                try? FileManager.default.removeItem(at: phoneURL)
+                try? FileManager.default.moveItem(at: scratch, to: phoneURL)
+                lastRecording = phoneURL
+                Log.write("mix: final \(phoneURL.path)")
+            } catch {
+                Log.write("mix: failed \(error.localizedDescription)")
+                errorMessage = error.localizedDescription
             }
+            isComposing = false
         }
+
+        if !settings.separateFiles, settings.target == .both, let phoneURL, let webcamURL {
+            isComposing = true
+            status = "Composing picture in picture…"
+            let base = phoneURL.deletingPathExtension().lastPathComponent
+            let output = phoneURL.deletingLastPathComponent().appendingPathComponent("\(base) PiP.mp4")
+            do {
+                let composite = try await PiPExporter.compose(phone: phoneURL, webcam: webcamURL, output: output)
+                if composite != phoneURL { try? FileManager.default.removeItem(at: phoneURL) }
+                try? FileManager.default.removeItem(at: webcamURL)
+                lastRecording = composite
+                lastWebcamRecording = nil
+                saved = [composite]
+                Log.write("pip: final \(composite.path)")
+            } catch {
+                Log.write("pip: failed \(error.localizedDescription)")
+                errorMessage = error.localizedDescription
+            }
+            isComposing = false
+        }
+
+        if isRunning { status = "Live" }
 
         if !saved.isEmpty {
             NSWorkspace.shared.activateFileViewerSelecting(saved)

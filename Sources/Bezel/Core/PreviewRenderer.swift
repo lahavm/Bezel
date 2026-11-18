@@ -32,6 +32,12 @@ final class PreviewRenderer {
         }
     }
 
+    /// The frame the preview is showing right now, already decoded by the
+    /// layer. This is how scrcpy takes a screenshot: no extra decode pass.
+    func displayedPixelBuffer() -> CVPixelBuffer? {
+        renderer.displayedPixelBuffer()
+    }
+
     func flush() {
         renderer.flush(removingDisplayedImage: true, completionHandler: nil)
         frameCount = 0

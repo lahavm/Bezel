@@ -18,7 +18,7 @@ enum RecorderError: LocalizedError {
 ///
 /// scrcpy samples carry only a presentation timestamp, so each frame is held
 /// until the next one arrives and then written with the measured duration.
-final class Recorder: @unchecked Sendable {
+final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let queue = DispatchQueue(label: "bezel.recorder")
     private var writer: AVAssetWriter?
     private var input: AVAssetWriterInput?
@@ -34,15 +34,20 @@ final class Recorder: @unchecked Sendable {
     private var hasSample = false
     private var nominalDuration = CMTime(value: 1, timescale: 60)
 
+    private var micInput: AVAssetWriterInput?
+    private var micSession: AVCaptureSession?
+    private let micQueue = DispatchQueue(label: "bezel.recorder.mic")
+    private var micOffset: CMTime = .invalid
+    private var lastMicPTS: CMTime = .invalid
+    private var micFrames = 0
+
     private(set) var url: URL?
 
     var isRunning: Bool {
         queue.sync { writer != nil }
     }
 
-    func start(fps: Int) throws -> URL {
-        let directory = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Bezel", isDirectory: true)
+    func start(fps: Int, directory: URL) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         let formatter = DateFormatter()
@@ -59,6 +64,9 @@ final class Recorder: @unchecked Sendable {
         self.sessionStartPTS = .invalid
         self.audioFormat = nil
         self.audioFrames = 0
+        self.micOffset = .invalid
+        self.lastMicPTS = .invalid
+        self.micFrames = 0
         self.started = false
         self.hasSample = false
         self.nominalDuration = CMTime(value: 1, timescale: CMTimeScale(max(1, fps)))
@@ -88,6 +96,75 @@ final class Recorder: @unchecked Sendable {
             audioInput = input
             audioFormat = format
             Log.write("recorder: audio input ready")
+        }
+    }
+
+    /// Adds a second audio track with the Mac microphone to the same file.
+    func startMicrophone() throws {
+        guard let writer, writer.status == .unknown else { return }
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: 48_000,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderBitRateKey: 128_000
+        ]
+        let input = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
+        input.expectsMediaDataInRealTime = true
+        guard writer.canAdd(input) else { throw RecorderError.writer("The writer rejected the microphone.") }
+        writer.add(input)
+        micInput = input
+
+        let session = AVCaptureSession()
+        guard let device = AVCaptureDevice.default(for: .audio),
+              let captureInput = try? AVCaptureDeviceInput(device: device) else {
+            throw RecorderError.writer("No microphone was found.")
+        }
+        let output = AVCaptureAudioDataOutput()
+        output.setSampleBufferDelegate(self, queue: micQueue)
+        session.beginConfiguration()
+        guard session.canAddInput(captureInput), session.canAddOutput(output) else {
+            session.commitConfiguration()
+            throw RecorderError.writer("The microphone could not be configured.")
+        }
+        session.addInput(captureInput)
+        session.addOutput(output)
+        session.commitConfiguration()
+        session.startRunning()
+        micSession = session
+        Log.write("mic: attached to the recording")
+    }
+
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard let micInput, micInput.isReadyForMoreMediaData else { return }
+        queue.async { [self] in
+            guard started, sessionStartPTS.isValid else { return }
+            let hostPTS = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            if !micOffset.isValid {
+                let hostMicros = CMTimeConvertScale(hostPTS, timescale: 1_000_000, method: .roundHalfAwayFromZero)
+                micOffset = CMTimeSubtract(sessionStartPTS, hostMicros)
+            }
+            let pts = CMTimeAdd(hostPTS, micOffset)
+            guard pts >= sessionStartPTS else { return }
+            var timing = CMSampleTimingInfo(
+                duration: CMSampleBufferGetDuration(sampleBuffer),
+                presentationTimeStamp: pts,
+                decodeTimeStamp: .invalid
+            )
+            var copy: CMSampleBuffer?
+            guard CMSampleBufferCreateCopyWithNewTiming(
+                allocator: kCFAllocatorDefault,
+                sampleBuffer: sampleBuffer,
+                sampleTimingEntryCount: 1,
+                sampleTimingArray: &timing,
+                sampleBufferOut: &copy
+            ) == noErr, let copy else { return }
+            if micInput.append(copy) {
+                micFrames += 1
+                lastMicPTS = pts
+                if micFrames == 1 || micFrames % 300 == 0 {
+                    Log.write("mic: frames=\(micFrames)")
+                }
+            }
         }
     }
 
@@ -162,9 +239,15 @@ final class Recorder: @unchecked Sendable {
 
                 let input = self.input
                 let audio = self.audioInput
+                let mic = self.micInput
                 self.input = nil
                 self.audioInput = nil
+                self.micInput = nil
                 self.writer = nil
+                if let micSession = self.micSession {
+                    micSession.stopRunning()
+                    self.micSession = nil
+                }
 
                 guard started, hasSample, lastPTS.isValid else {
                     writer.cancelWriting()
@@ -175,7 +258,9 @@ final class Recorder: @unchecked Sendable {
 
                 input?.markAsFinished()
                 audio?.markAsFinished()
-                let end = lastAudioPTS.isValid ? CMTimeMaximum(lastPTS, lastAudioPTS) : lastPTS
+                mic?.markAsFinished()
+                var end = lastAudioPTS.isValid ? CMTimeMaximum(lastPTS, lastAudioPTS) : lastPTS
+                if lastMicPTS.isValid { end = CMTimeMaximum(end, lastMicPTS) }
                 writer.endSession(atSourceTime: CMTimeAdd(end, nominalDuration))
                 writer.finishWriting {
                     if writer.status != .completed {

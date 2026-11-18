@@ -69,6 +69,21 @@ enum H264Frames {
         return output
     }
 
+    /// True when the packet contains an IDR slice (type 5).
+    static func isKeyframe(avcc: Data) -> Bool {
+        let bytes = [UInt8](avcc)
+        var index = 0
+        while index + 4 <= bytes.count {
+            let length = Int(bytes[index]) << 24 | Int(bytes[index + 1]) << 16
+                | Int(bytes[index + 2]) << 8 | Int(bytes[index + 3])
+            index += 4
+            guard length > 0, index < bytes.count else { break }
+            if bytes[index] & 0x1F == 5 { return true }
+            index += length
+        }
+        return false
+    }
+
     static func sampleBuffer(
         avcc: Data,
         format: CMVideoFormatDescription,
@@ -123,6 +138,15 @@ enum H264Frames {
             value: kCFBooleanTrue,
             attachmentMode: kCMAttachmentMode_ShouldNotPropagate
         )
+        // Mark keyframes so seeking and screenshot decoding start at an IDR.
+        if !isKeyframe(avcc: avcc) {
+            CMSetAttachment(
+                sample,
+                key: kCMSampleAttachmentKey_NotSync,
+                value: kCFBooleanTrue,
+                attachmentMode: kCMAttachmentMode_ShouldNotPropagate
+            )
+        }
         return sample
     }
 }

@@ -38,21 +38,44 @@ enum AudioFrames {
             }
         }
 
+        // CoreMedia expects the AAC magic cookie in ESDS form, not as a bare
+        // AudioSpecificConfig. A raw ASC makes the writer produce an `esds`
+        // that AVFoundation can't read back, so wrap it in the descriptors.
+        let cookie = esds(asc: asc)
         var formatDescription: CMAudioFormatDescription?
         var streamDescription = description
-        let status = asc.withUnsafeBytes { cookie in
+        let status = cookie.withUnsafeBytes { bytes in
             CMAudioFormatDescriptionCreate(
                 allocator: kCFAllocatorDefault,
                 asbd: &streamDescription,
                 layoutSize: 0,
                 layout: nil,
-                magicCookieSize: asc.count,
-                magicCookie: cookie.baseAddress,
+                magicCookieSize: cookie.count,
+                magicCookie: bytes.baseAddress,
                 extensions: nil,
                 formatDescriptionOut: &formatDescription
             )
         }
         return status == noErr ? formatDescription : nil
+    }
+
+    /// Minimal MPEG-4 ESDS describing an AAC stream, which is what CoreMedia
+    /// stores as the magic cookie for AAC tracks.
+    private static func esds(asc: Data) -> Data {
+        func descriptor(_ tag: UInt8, _ body: [UInt8]) -> [UInt8] {
+            // 4-byte length form, as used by CoreMedia.
+            var out: [UInt8] = [tag, 0x80, 0x80, 0x80, UInt8(body.count)]
+            out.append(contentsOf: body)
+            return out
+        }
+
+        let decoderConfig = descriptor(0x04, [0x40, 0x15, 0x00, 0x00, 0x00]
+            + [0x00, 0x01, 0xF4, 0x00]   // max bitrate 128000
+            + [0x00, 0x01, 0xF4, 0x00]   // average bitrate 128000
+            + descriptor(0x05, [UInt8](asc)))
+        let slConfig = descriptor(0x06, [0x02])
+        let es = descriptor(0x03, [0x00, 0x00, 0x00] + decoderConfig + slConfig)
+        return Data(es)
     }
 
     static func sampleBuffer(

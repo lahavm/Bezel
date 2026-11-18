@@ -47,11 +47,25 @@ struct Settings: Sendable, Equatable, Codable {
     var target: Target = .phone
     var webcamResolution: Int = 1080
     var macMic = false
+    var separateFiles = false
+    var recordingsFolder = ""
     var resolution: Resolution = .fhd
+    /// 0 means "native": the phone's own refresh rate, no cap requested.
     var fps: Int = 60
     var codec: String = "h264"
     var cameraFacing: String = "back"
     var cameraId: Int?
+
+    static var defaultFolder: URL {
+        FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Bezel", isDirectory: true)
+    }
+
+    var outputDirectory: URL {
+        recordingsFolder.isEmpty
+            ? Self.defaultFolder
+            : URL(fileURLWithPath: recordingsFolder, isDirectory: true)
+    }
 
     static func load() -> Settings {
         guard let data = UserDefaults.standard.data(forKey: "bezel.settings"),

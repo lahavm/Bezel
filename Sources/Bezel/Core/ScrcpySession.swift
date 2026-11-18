@@ -147,9 +147,13 @@ final class ScrcpySession: @unchecked Sendable {
             "tunnel_forward=false",
             "send_device_meta=false",
             "cleanup=true",
-            "max_fps=\(settings.fps)",
-            "video_codec=\(settings.codec)"
+            "video_codec=\(settings.codec)",
+            // A keyframe every second keeps screenshots exact and recordings seekable.
+            "video_codec_options=i-frame-interval=1"
         ]
+        if settings.fps > 0 {
+            arguments.append("max_fps=\(settings.fps)")
+        }
         if settings.audio != .none {
             arguments.append("audio_codec=aac")
             arguments.append("audio_source=\(settings.audio == .microphone ? "mic" : "output")")
@@ -164,7 +168,9 @@ final class ScrcpySession: @unchecked Sendable {
             } else {
                 arguments.append("camera_facing=\(settings.cameraFacing)")
             }
-            arguments.append("camera_fps=\(settings.fps)")
+            if settings.fps > 0 {
+                arguments.append("camera_fps=\(settings.fps)")
+            }
             switch settings.resolution {
             case .uhd: arguments.append("camera_size=3840x2160")
             case .qhd: arguments.append("camera_size=2560x1440")
