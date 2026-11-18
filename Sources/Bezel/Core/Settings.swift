@@ -95,6 +95,8 @@ struct Settings: Sendable, Equatable, Codable {
     var webcamY: Double = 0.75
     var webcamBlur = false
     var webcamBlurAmount: Double = 0.5
+    /// False until the welcome screen has been dismissed once.
+    var hasSeenWelcome = false
 
     static var defaultFolder: URL {
         FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
@@ -113,6 +115,7 @@ struct Settings: Sendable, Equatable, Codable {
         case source, control, audio, target, macMic, micId, separateFiles, recordingsFolder
         case resolution, fps, codec, cameraFacing, cameraId
         case phoneVolume, micVolume, hearPhoneAudio, webcamShape, webcamSize, webcamScale, webcamX, webcamY, webcamBlur, webcamBlurAmount
+        case hasSeenWelcome
     }
 
     /// Decodes missing keys with their defaults, so adding a setting never
@@ -142,6 +145,7 @@ struct Settings: Sendable, Equatable, Codable {
         webcamY = try container.decodeIfPresent(Double.self, forKey: .webcamY) ?? 0.75
         webcamBlur = try container.decodeIfPresent(Bool.self, forKey: .webcamBlur) ?? false
         webcamBlurAmount = try container.decodeIfPresent(Double.self, forKey: .webcamBlurAmount) ?? 0.5
+        hasSeenWelcome = try container.decodeIfPresent(Bool.self, forKey: .hasSeenWelcome) ?? false
     }
 
     static func load() -> Settings {

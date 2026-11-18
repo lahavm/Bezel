@@ -50,6 +50,13 @@ struct BezelApp: App {
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(!state.isRunning && !state.canConnect)
             }
+            CommandGroup(after: .help) {
+                Divider()
+                Button("About Bezel") {
+                    AboutPanel.show(version: state.version)
+                }
+                Link("Bezel on GitHub", destination: AboutPanel.githubURL)
+            }
         }
     }
 }

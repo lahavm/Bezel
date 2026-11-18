@@ -69,6 +69,9 @@ struct ContentView: View {
         } message: {
             Text(state.errorMessage ?? "")
         }
+        .sheet(isPresented: $state.showWelcome) {
+            WelcomeView()
+        }
     }
 
     private func toggleFullScreen() {

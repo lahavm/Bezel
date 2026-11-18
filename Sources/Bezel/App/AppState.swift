@@ -33,6 +33,11 @@ final class AppState {
     var lastWebcamRecording: URL?
     var lastScreenshot: URL?
     var isComposing = false
+    var showWelcome = false
+
+    var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.1"
+    }
     var phoneLevel: Float = 0
     var micLevel: Float = 0
     var cameras: [CameraInfo] = []
@@ -119,6 +124,8 @@ final class AppState {
         micMeter.onLevel = { [weak self] level in
             Task { @MainActor in self?.micLevel = level }
         }
+        let hasSeen = settings.hasSeenWelcome
+        showWelcome = !hasSeen
         Log.write("app: state created")
     }
 
