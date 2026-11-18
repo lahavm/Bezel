@@ -12,8 +12,28 @@ private func makeGradient(_ colors: [NSColor], _ locations: [CGFloat]) -> CGGrad
     )
 }
 
-/// A graphite squircle, a phone with a polished bezel, and the camera inset.
-/// Kept as drawing code so every size of the .icns stays crisp.
+private func strokeGradient(
+    _ ctx: CGContext,
+    path: CGPath,
+    colors: [NSColor],
+    locations: [CGFloat],
+    lineWidth: CGFloat,
+    from: CGPoint,
+    to: CGPoint
+) {
+    guard let gradient = makeGradient(colors, locations) else { return }
+    ctx.saveGState()
+    ctx.addPath(path)
+    ctx.setLineWidth(lineWidth)
+    ctx.replacePathWithStrokedPath()
+    ctx.clip()
+    ctx.drawLinearGradient(gradient, start: from, end: to, options: [])
+    ctx.restoreGState()
+}
+
+/// A graphite squircle, a dark glass phone with a luminous bezel, and one mint
+/// camera inset. Flat gradients and negative space instead of hardware detail,
+/// so the mark stays clean at 16 points and matches macOS 26.
 func drawBezelIcon(size: CGFloat) -> NSImage {
     let img = NSImage(size: CGSize(width: size, height: size))
     img.lockFocus()
@@ -27,23 +47,21 @@ func drawBezelIcon(size: CGFloat) -> NSImage {
 
     // Standard macOS squircle grid: 824 × 824 on a 1024 canvas.
     let squircleRect = CGRect(x: 100 * scale, y: 100 * scale, width: 824 * scale, height: 824 * scale)
-    let cornerRadius = 185 * scale
     let squirclePath = CGPath(
         roundedRect: squircleRect,
-        cornerWidth: cornerRadius,
-        cornerHeight: cornerRadius,
+        cornerWidth: 185 * scale,
+        cornerHeight: 185 * scale,
         transform: nil
     )
 
-    // Contact shadow under the icon.
     ctx.saveGState()
     ctx.setShadow(
-        offset: CGSize(width: 0, height: -22 * scale),
-        blur: 40 * scale,
-        color: NSColor.black.withAlphaComponent(0.5).cgColor
+        offset: CGSize(width: 0, height: -20 * scale),
+        blur: 38 * scale,
+        color: NSColor.black.withAlphaComponent(0.45).cgColor
     )
     ctx.addPath(squirclePath)
-    ctx.setFillColor(NSColor(red: 0.035, green: 0.04, blue: 0.06, alpha: 1).cgColor)
+    ctx.setFillColor(NSColor(red: 0.035, green: 0.04, blue: 0.055, alpha: 1).cgColor)
     ctx.fillPath()
     ctx.restoreGState()
 
@@ -53,10 +71,10 @@ func drawBezelIcon(size: CGFloat) -> NSImage {
 
     // Graphite body.
     if let background = makeGradient([
-        NSColor(red: 0.17, green: 0.19, blue: 0.24, alpha: 1),
-        NSColor(red: 0.10, green: 0.11, blue: 0.15, alpha: 1),
-        NSColor(red: 0.045, green: 0.05, blue: 0.07, alpha: 1)
-    ], [0, 0.45, 1]) {
+        NSColor(red: 0.145, green: 0.16, blue: 0.19, alpha: 1),
+        NSColor(red: 0.075, green: 0.083, blue: 0.10, alpha: 1),
+        NSColor(red: 0.032, green: 0.036, blue: 0.048, alpha: 1)
+    ], [0, 0.5, 1]) {
         ctx.drawLinearGradient(
             background,
             start: CGPoint(x: size * 0.5, y: squircleRect.maxY),
@@ -65,46 +83,33 @@ func drawBezelIcon(size: CGFloat) -> NSImage {
         )
     }
 
-    // Soft light falling from the top left.
-    if let sheen = makeGradient([
-        NSColor.white.withAlphaComponent(0.08),
-        NSColor.white.withAlphaComponent(0)
-    ], [0, 1]) {
-        ctx.drawLinearGradient(
-            sheen,
-            start: CGPoint(x: squircleRect.minX, y: squircleRect.maxY),
-            end: CGPoint(x: squircleRect.maxX, y: squircleRect.minY - 120 * scale),
-            options: []
-        )
-    }
-
-    // Aqua light behind the phone.
+    // Cool light behind the phone.
     if let glow = makeGradient([
-        NSColor(red: 0.24, green: 0.68, blue: 0.86, alpha: 0.22),
-        NSColor(red: 0.24, green: 0.68, blue: 0.86, alpha: 0)
+        NSColor(red: 0.18, green: 0.80, blue: 0.78, alpha: 0.18),
+        NSColor(red: 0.18, green: 0.80, blue: 0.78, alpha: 0)
     ], [0, 1]) {
-        let center = CGPoint(x: size * 0.5, y: size * 0.54)
+        let center = CGPoint(x: size * 0.5, y: size * 0.53)
         ctx.drawRadialGradient(
             glow,
             startCenter: center,
-            startRadius: 30 * scale,
+            startRadius: 20 * scale,
             endCenter: center,
-            endRadius: 410 * scale,
+            endRadius: 430 * scale,
             options: []
         )
     }
 
-    // Phone chassis.
-    let phoneWidth = 436 * scale
-    let phoneHeight = 672 * scale
+    // Phone body.
+    let phoneWidth = 424 * scale
+    let phoneHeight = 664 * scale
     let phoneRect = CGRect(
         x: (size - phoneWidth) / 2,
-        y: (size - phoneHeight) / 2 + 4 * scale,
+        y: (size - phoneHeight) / 2 + 6 * scale,
         width: phoneWidth,
         height: phoneHeight
     )
-    let phoneCorner = 64 * scale
-    let chassisPath = CGPath(
+    let phoneCorner = 104 * scale
+    let phonePath = CGPath(
         roundedRect: phoneRect,
         cornerWidth: phoneCorner,
         cornerHeight: phoneCorner,
@@ -113,39 +118,32 @@ func drawBezelIcon(size: CGFloat) -> NSImage {
 
     ctx.saveGState()
     ctx.setShadow(
-        offset: CGSize(width: 0, height: -16 * scale),
-        blur: 26 * scale,
-        color: NSColor.black.withAlphaComponent(0.65).cgColor
+        offset: CGSize(width: 0, height: -18 * scale),
+        blur: 34 * scale,
+        color: NSColor.black.withAlphaComponent(0.55).cgColor
     )
-    ctx.addPath(chassisPath)
-    ctx.setFillColor(NSColor(red: 0.025, green: 0.03, blue: 0.045, alpha: 1).cgColor)
+    ctx.addPath(phonePath)
+    ctx.setFillColor(NSColor(red: 0.02, green: 0.025, blue: 0.035, alpha: 1).cgColor)
     ctx.fillPath()
     ctx.restoreGState()
 
-    // Polished metal edge.
-    ctx.saveGState()
-    ctx.addPath(chassisPath)
-    ctx.setLineWidth(5 * scale)
-    if let metal = makeGradient([
-        NSColor(red: 0.72, green: 0.76, blue: 0.82, alpha: 0.9),
-        NSColor(red: 0.30, green: 0.33, blue: 0.39, alpha: 0.75),
-        NSColor(red: 0.14, green: 0.15, blue: 0.18, alpha: 0.6)
-    ], [0, 0.45, 1]) {
-        ctx.replacePathWithStrokedPath()
-        ctx.clip()
-        ctx.drawLinearGradient(
-            metal,
-            start: CGPoint(x: size * 0.5, y: phoneRect.maxY),
-            end: CGPoint(x: size * 0.5, y: phoneRect.minY),
-            options: []
-        )
-    }
-    ctx.restoreGState()
+    strokeGradient(
+        ctx,
+        path: phonePath,
+        colors: [
+            NSColor.white.withAlphaComponent(0.30),
+            NSColor.white.withAlphaComponent(0.10),
+            NSColor.white.withAlphaComponent(0.03)
+        ],
+        locations: [0, 0.55, 1],
+        lineWidth: 3 * scale,
+        from: CGPoint(x: size * 0.5, y: phoneRect.maxY),
+        to: CGPoint(x: size * 0.5, y: phoneRect.minY)
+    )
 
-    // The bezel margin around the display.
-    let bezelInset = 16 * scale
-    let screenRect = phoneRect.insetBy(dx: bezelInset, dy: bezelInset)
-    let screenCorner = phoneCorner - 10 * scale
+    // Display.
+    let screenRect = phoneRect.insetBy(dx: 20 * scale, dy: 20 * scale)
+    let screenCorner = 88 * scale
     let screenPath = CGPath(
         roundedRect: screenRect,
         cornerWidth: screenCorner,
@@ -158,11 +156,10 @@ func drawBezelIcon(size: CGFloat) -> NSImage {
     ctx.clip()
 
     if let screen = makeGradient([
-        NSColor(red: 0.035, green: 0.13, blue: 0.25, alpha: 1),
-        NSColor(red: 0.035, green: 0.34, blue: 0.45, alpha: 1),
-        NSColor(red: 0.20, green: 0.66, blue: 0.72, alpha: 1),
-        NSColor(red: 0.55, green: 0.90, blue: 0.89, alpha: 1)
-    ], [0, 0.42, 0.8, 1]) {
+        NSColor(red: 0.035, green: 0.15, blue: 0.21, alpha: 1),
+        NSColor(red: 0.035, green: 0.32, blue: 0.39, alpha: 1),
+        NSColor(red: 0.075, green: 0.62, blue: 0.62, alpha: 1)
+    ], [0, 0.55, 1]) {
         ctx.drawLinearGradient(
             screen,
             start: CGPoint(x: screenRect.minX, y: screenRect.maxY),
@@ -171,87 +168,33 @@ func drawBezelIcon(size: CGFloat) -> NSImage {
         )
     }
 
-    // Cool bloom in the lower right of the display.
     if let bloom = makeGradient([
-        NSColor(red: 0.55, green: 0.95, blue: 0.95, alpha: 0.35),
-        NSColor(red: 0.55, green: 0.95, blue: 0.95, alpha: 0)
+        NSColor(red: 0.55, green: 0.98, blue: 0.90, alpha: 0.38),
+        NSColor(red: 0.55, green: 0.98, blue: 0.90, alpha: 0)
     ], [0, 1]) {
-        let center = CGPoint(
-            x: screenRect.maxX - 80 * scale,
-            y: screenRect.minY + 110 * scale
-        )
+        let center = CGPoint(x: screenRect.maxX - 120 * scale, y: screenRect.minY + 120 * scale)
         ctx.drawRadialGradient(
             bloom,
             startCenter: center,
-            startRadius: 5 * scale,
+            startRadius: 4 * scale,
             endCenter: center,
-            endRadius: 330 * scale,
+            endRadius: 300 * scale,
             options: []
         )
     }
 
-    // Glass reflection.
-    let reflection = CGMutablePath()
-    reflection.move(to: CGPoint(x: screenRect.minX, y: screenRect.maxY))
-    reflection.addLine(to: CGPoint(x: screenRect.maxX, y: screenRect.maxY - screenRect.height * 0.46))
-    reflection.addLine(to: CGPoint(x: screenRect.maxX, y: screenRect.minY))
-    reflection.addLine(to: CGPoint(x: screenRect.minX, y: screenRect.minY + screenRect.height * 0.30))
-    reflection.closeSubpath()
-    ctx.addPath(reflection)
-    ctx.setFillColor(NSColor.white.withAlphaComponent(0.07).cgColor)
-    ctx.fillPath()
-
-    // A second, narrower glint.
-    let glint = CGMutablePath()
-    glint.move(to: CGPoint(x: screenRect.minX, y: screenRect.maxY - 30 * scale))
-    glint.addLine(to: CGPoint(x: screenRect.maxX, y: screenRect.maxY - screenRect.height * 0.55))
-    glint.addLine(to: CGPoint(x: screenRect.maxX, y: screenRect.maxY - screenRect.height * 0.42))
-    glint.addLine(to: CGPoint(x: screenRect.minX, y: screenRect.maxY - 10 * scale))
-    glint.closeSubpath()
-    ctx.addPath(glint)
-    ctx.setFillColor(NSColor.white.withAlphaComponent(0.05).cgColor)
-    ctx.fillPath()
-
-    // Inner display rim.
     ctx.addPath(screenPath)
     ctx.setLineWidth(2 * scale)
-    ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.16).cgColor)
+    ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.10).cgColor)
     ctx.strokePath()
 
-    // Dynamic Island.
-    let islandWidth = 88 * scale
-    let islandHeight = 22 * scale
-    let islandRect = CGRect(
-        x: (size - islandWidth) / 2,
-        y: screenRect.maxY - 30 * scale,
-        width: islandWidth,
-        height: islandHeight
-    )
-    ctx.addPath(CGPath(
-        roundedRect: islandRect,
-        cornerWidth: islandHeight / 2,
-        cornerHeight: islandHeight / 2,
-        transform: nil
-    ))
-    ctx.setFillColor(NSColor(red: 0.015, green: 0.02, blue: 0.03, alpha: 0.98).cgColor)
-    ctx.fillPath()
+    ctx.restoreGState()
 
-    let islandLens = CGRect(
-        x: islandRect.maxX - 28 * scale,
-        y: islandRect.midY - 3.5 * scale,
-        width: 7 * scale,
-        height: 7 * scale
-    )
-    ctx.setFillColor(NSColor(red: 0.10, green: 0.25, blue: 0.34, alpha: 1).cgColor)
-    ctx.fillEllipse(in: islandLens)
-
-    ctx.restoreGState() // screen clip
-
-    // Camera badge, the signature inset.
+    // Camera inset.
     let camRadius = 108 * scale
     let camCenter = CGPoint(
-        x: screenRect.maxX - 4 * scale,
-        y: screenRect.minY + 40 * scale
+        x: screenRect.maxX - 26 * scale,
+        y: screenRect.minY + 64 * scale
     )
     let camRect = CGRect(
         x: camCenter.x - camRadius,
@@ -260,93 +203,87 @@ func drawBezelIcon(size: CGFloat) -> NSImage {
         height: camRadius * 2
     )
 
-    ctx.saveGState()
-    ctx.setShadow(
-        offset: CGSize(width: 0, height: -12 * scale),
-        blur: 20 * scale,
-        color: NSColor.black.withAlphaComponent(0.6).cgColor
-    )
-    ctx.addEllipse(in: camRect)
-    ctx.setFillColor(NSColor(red: 0.05, green: 0.06, blue: 0.085, alpha: 1).cgColor)
-    ctx.fillPath()
-    ctx.restoreGState()
-
-    ctx.saveGState()
-    ctx.addEllipse(in: camRect)
-    ctx.setLineWidth(5 * scale)
-    if let rim = makeGradient([
-        NSColor.white.withAlphaComponent(0.72),
-        NSColor.white.withAlphaComponent(0.34),
-        NSColor.white.withAlphaComponent(0.10)
-    ], [0, 0.5, 1]) {
-        ctx.replacePathWithStrokedPath()
-        ctx.clip()
-        ctx.drawLinearGradient(
-            rim,
-            start: CGPoint(x: camCenter.x, y: camRect.maxY),
-            end: CGPoint(x: camCenter.x, y: camRect.minY),
+    if let halo = makeGradient([
+        NSColor(red: 0.55, green: 0.98, blue: 0.90, alpha: 0.20),
+        NSColor(red: 0.55, green: 0.98, blue: 0.90, alpha: 0)
+    ], [0, 1]) {
+        ctx.drawRadialGradient(
+            halo,
+            startCenter: camCenter,
+            startRadius: camRadius * 0.8,
+            endCenter: camCenter,
+            endRadius: camRadius * 2.1,
             options: []
         )
     }
-    ctx.restoreGState()
 
     ctx.saveGState()
-    let lensRect = camRect.insetBy(dx: 8 * scale, dy: 8 * scale)
+    ctx.setShadow(
+        offset: CGSize(width: 0, height: -12 * scale),
+        blur: 26 * scale,
+        color: NSColor.black.withAlphaComponent(0.55).cgColor
+    )
+    ctx.addEllipse(in: camRect)
+    ctx.setFillColor(NSColor(red: 0.025, green: 0.03, blue: 0.045, alpha: 1).cgColor)
+    ctx.fillPath()
+    ctx.restoreGState()
+
+    strokeGradient(
+        ctx,
+        path: CGPath(ellipseIn: camRect, transform: nil),
+        colors: [
+            NSColor(red: 0.82, green: 1.0, blue: 0.94, alpha: 1),
+            NSColor(red: 0.25, green: 0.87, blue: 0.78, alpha: 1),
+            NSColor(red: 0.04, green: 0.45, blue: 0.42, alpha: 1)
+        ],
+        locations: [0, 0.5, 1],
+        lineWidth: 12 * scale,
+        from: CGPoint(x: camCenter.x, y: camRect.maxY),
+        to: CGPoint(x: camCenter.x, y: camRect.minY)
+    )
+
+    let lensRect = camRect.insetBy(dx: 30 * scale, dy: 30 * scale)
+    ctx.saveGState()
     ctx.addEllipse(in: lensRect)
     ctx.clip()
-
     if let lens = makeGradient([
-        NSColor(red: 0.06, green: 0.16, blue: 0.28, alpha: 1),
-        NSColor(red: 0.015, green: 0.035, blue: 0.075, alpha: 1)
+        NSColor(red: 0.07, green: 0.19, blue: 0.25, alpha: 1),
+        NSColor(red: 0.01, green: 0.03, blue: 0.055, alpha: 1)
     ], [0, 1]) {
         ctx.drawRadialGradient(
             lens,
-            startCenter: CGPoint(x: camCenter.x - 26 * scale, y: camCenter.y + 26 * scale),
-            startRadius: 5 * scale,
+            startCenter: CGPoint(x: camCenter.x - 24 * scale, y: camCenter.y + 24 * scale),
+            startRadius: 4 * scale,
             endCenter: camCenter,
             endRadius: camRadius,
             options: []
         )
     }
+    ctx.restoreGState()
 
-    let irisRect = lensRect.insetBy(dx: 26 * scale, dy: 26 * scale)
-    ctx.setLineWidth(3 * scale)
-    ctx.setStrokeColor(NSColor(red: 0.30, green: 0.72, blue: 0.86, alpha: 0.5).cgColor)
-    ctx.strokeEllipse(in: irisRect)
+    // One small specular, no glossy reflection.
+    ctx.setFillColor(NSColor.white.withAlphaComponent(0.55).cgColor)
+    ctx.fillEllipse(in: CGRect(
+        x: camCenter.x - 36 * scale,
+        y: camCenter.y + 22 * scale,
+        width: 18 * scale,
+        height: 18 * scale
+    ))
 
-    let apertureRect = irisRect.insetBy(dx: 18 * scale, dy: 18 * scale)
-    ctx.setFillColor(NSColor(red: 0.01, green: 0.025, blue: 0.055, alpha: 1).cgColor)
-    ctx.fillEllipse(in: apertureRect)
-
-    let specular = CGRect(
-        x: camCenter.x - 42 * scale,
-        y: camCenter.y + 20 * scale,
-        width: 27 * scale,
-        height: 17 * scale
+    // Squircle edge.
+    strokeGradient(
+        ctx,
+        path: squirclePath,
+        colors: [
+            NSColor.white.withAlphaComponent(0.30),
+            NSColor.white.withAlphaComponent(0.08),
+            NSColor.white.withAlphaComponent(0.02)
+        ],
+        locations: [0, 0.55, 1],
+        lineWidth: 2.5 * scale,
+        from: CGPoint(x: size * 0.5, y: squircleRect.maxY),
+        to: CGPoint(x: size * 0.5, y: squircleRect.minY)
     )
-    ctx.setFillColor(NSColor.white.withAlphaComponent(0.5).cgColor)
-    ctx.fillEllipse(in: specular)
-    ctx.restoreGState()
-
-    // Squircle bevel.
-    ctx.saveGState()
-    ctx.addPath(squirclePath)
-    ctx.setLineWidth(2.5 * scale)
-    if let rim = makeGradient([
-        NSColor.white.withAlphaComponent(0.38),
-        NSColor.white.withAlphaComponent(0.10),
-        NSColor.white.withAlphaComponent(0.03)
-    ], [0, 0.55, 1]) {
-        ctx.replacePathWithStrokedPath()
-        ctx.clip()
-        ctx.drawLinearGradient(
-            rim,
-            start: CGPoint(x: size * 0.5, y: squircleRect.maxY),
-            end: CGPoint(x: size * 0.5, y: squircleRect.minY),
-            options: []
-        )
-    }
-    ctx.restoreGState()
 
     ctx.restoreGState()
     img.unlockFocus()

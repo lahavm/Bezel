@@ -85,7 +85,7 @@ struct Settings: Sendable, Equatable, Codable {
     var phoneVolume: Double = 1
     var micVolume: Double = 1
     var hearPhoneAudio: Bool = true
-    var webcamShape: WebcamShape = .rounded
+    var webcamShape: WebcamShape = .circle
     var webcamSize: WebcamSize = .medium
     var webcamScale: Double = 0.28
     /// Normalized center of the camera overlay, measured from the top-left.
@@ -132,7 +132,7 @@ struct Settings: Sendable, Equatable, Codable {
         phoneVolume = try container.decodeIfPresent(Double.self, forKey: .phoneVolume) ?? 1
         micVolume = try container.decodeIfPresent(Double.self, forKey: .micVolume) ?? 1
         hearPhoneAudio = try container.decodeIfPresent(Bool.self, forKey: .hearPhoneAudio) ?? true
-        webcamShape = try container.decodeIfPresent(WebcamShape.self, forKey: .webcamShape) ?? .rounded
+        webcamShape = try container.decodeIfPresent(WebcamShape.self, forKey: .webcamShape) ?? .circle
         webcamSize = try container.decodeIfPresent(WebcamSize.self, forKey: .webcamSize) ?? .medium
         webcamScale = try container.decodeIfPresent(Double.self, forKey: .webcamScale) ?? 0.28
         webcamX = try container.decodeIfPresent(Double.self, forKey: .webcamX) ?? 0.82

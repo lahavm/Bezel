@@ -255,9 +255,9 @@ struct ContentView: View {
 
             if !state.isRunning && !state.isComposing {
                 VStack(spacing: 10) {
-                    BrandMark(size: 54)
-                        .opacity(0.55)
-                        .shadow(color: .black.opacity(0.45), radius: 14, y: 4)
+                    Image(systemName: "iphone.gen3")
+                        .font(.system(size: 34, weight: .light))
+                        .foregroundStyle(.white.opacity(0.55))
                     Text(state.canConnect ? "Ready to mirror" : "Connect a device over USB")
                         .font(.callout)
                         .foregroundStyle(.white.opacity(0.55))
@@ -307,20 +307,26 @@ struct ContentView: View {
                 .padding(14)
             }
         }
-        .overlay(alignment: .topTrailing) {
+        .overlay(alignment: .top) {
             if state.isRecording, let start = state.recordStart, isFullScreen {
                 TimelineView(.periodic(from: start, by: 1)) { context in
-                    HStack(spacing: 6) {
+                    HStack(spacing: 7) {
                         Circle().fill(.red).frame(width: 8, height: 8)
+                        Text("REC")
+                            .font(.caption2.weight(.bold))
+                            .kerning(0.6)
                         Text(clock(from: start, to: context.date))
                             .font(.caption.monospacedDigit())
+                            .opacity(0.85)
                     }
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(.black.opacity(0.45), in: Capsule())
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(.black.opacity(0.6), in: Capsule())
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 1))
                 }
-                .padding(14)
+                .padding(.top, 16)
+                .allowsHitTesting(false)
             }
         }
     }

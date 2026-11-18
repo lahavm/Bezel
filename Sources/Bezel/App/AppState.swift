@@ -590,10 +590,6 @@ final class AppState {
         }
 
         if isRunning { status = "Live" }
-
-        if !saved.isEmpty {
-            NSWorkspace.shared.activateFileViewerSelecting(saved)
-        }
     }
 
     func disconnect() {

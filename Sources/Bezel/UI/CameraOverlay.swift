@@ -69,7 +69,7 @@ struct CameraOverlay: View {
                 }
             }
             .gesture(
-                DragGesture(minimumDistance: 1)
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
                     .onChanged { value in
                         if !isDragging {
                             isDragging = true
