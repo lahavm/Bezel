@@ -26,7 +26,26 @@ struct Settings: Sendable, Equatable {
         }
     }
 
+    enum Audio: String, CaseIterable, Identifiable, Sendable {
+        case none = "None"
+        case device = "Phone"
+        case microphone = "Phone mic"
+        var id: String { rawValue }
+    }
+
+    enum Target: String, CaseIterable, Identifiable, Sendable {
+        case phone = "Phone"
+        case webcam = "Mac camera"
+        case both = "Both"
+        var id: String { rawValue }
+        var recordsPhone: Bool { self == .phone || self == .both }
+        var recordsWebcam: Bool { self == .webcam || self == .both }
+    }
+
     var source: Source = .screen
+    var audio: Audio = .device
+    var target: Target = .phone
+    var webcamResolution: Int = 1080
     var resolution: Resolution = .fhd
     var fps: Int = 60
     var codec: String = "h264"

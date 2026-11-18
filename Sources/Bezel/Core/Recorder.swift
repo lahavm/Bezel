@@ -22,6 +22,11 @@ final class Recorder: @unchecked Sendable {
     private let queue = DispatchQueue(label: "bezel.recorder")
     private var writer: AVAssetWriter?
     private var input: AVAssetWriterInput?
+    private var audioInput: AVAssetWriterInput?
+    private var audioFormat: CMAudioFormatDescription?
+    private var lastAudioPTS: CMTime = .invalid
+    private var sessionStartPTS: CMTime = .invalid
+    private var audioFrames = 0
     private var pending: CMSampleBuffer?
     private var pendingPTS: CMTime = .invalid
     private var lastPTS: CMTime = .invalid
@@ -50,10 +55,57 @@ final class Recorder: @unchecked Sendable {
         self.pending = nil
         self.pendingPTS = .invalid
         self.lastPTS = .invalid
+        self.lastAudioPTS = .invalid
+        self.sessionStartPTS = .invalid
+        self.audioFormat = nil
+        self.audioFrames = 0
         self.started = false
         self.hasSample = false
         self.nominalDuration = CMTime(value: 1, timescale: CMTimeScale(max(1, fps)))
         return fileURL
+    }
+
+    /// The device sends one AudioSpecificConfig packet before any audio frame.
+    func configureAudio(asc: Data) {
+        queue.async { [self] in
+            guard let writer else { return }
+            guard audioInput == nil else { return }
+            guard writer.status == .unknown else {
+                Log.write("recorder: audio config arrived too late")
+                return
+            }
+            guard let format = AudioFrames.formatDescription(asc: asc) else {
+                Log.write("recorder: unsupported audio config")
+                return
+            }
+            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: nil, sourceFormatHint: format)
+            input.expectsMediaDataInRealTime = true
+            guard writer.canAdd(input) else {
+                Log.write("recorder: writer rejected the audio input")
+                return
+            }
+            writer.add(input)
+            audioInput = input
+            audioFormat = format
+            Log.write("recorder: audio input ready")
+        }
+    }
+
+    func appendAudio(frame: Data, ptsMicros: Int64) {
+        queue.async { [self] in
+            guard let audioFormat, let audioInput, started, sessionStartPTS.isValid else { return }
+            guard audioInput.isReadyForMoreMediaData else { return }
+            let pts = CMTime(value: ptsMicros, timescale: 1_000_000)
+            guard pts >= sessionStartPTS else { return }
+            guard let sample = AudioFrames.sampleBuffer(frame: frame, format: audioFormat, ptsMicros: ptsMicros) else { return }
+            if audioInput.append(sample) {
+                audioFrames += 1
+                if audioFrames == 1 || audioFrames % 500 == 0 {
+                    Log.write("recorder: audio frames=\(audioFrames)")
+                }
+                lastAudioPTS = pts
+            }
+        }
     }
 
     func append(_ sample: CMSampleBuffer) {
@@ -81,6 +133,7 @@ final class Recorder: @unchecked Sendable {
                     return
                 }
                 writer.startSession(atSourceTime: pts)
+                sessionStartPTS = pts
                 started = true
             }
 
@@ -108,7 +161,9 @@ final class Recorder: @unchecked Sendable {
                 pending = nil
 
                 let input = self.input
+                let audio = self.audioInput
                 self.input = nil
+                self.audioInput = nil
                 self.writer = nil
 
                 guard started, hasSample, lastPTS.isValid else {
@@ -119,7 +174,9 @@ final class Recorder: @unchecked Sendable {
                 }
 
                 input?.markAsFinished()
-                writer.endSession(atSourceTime: CMTimeAdd(lastPTS, nominalDuration))
+                audio?.markAsFinished()
+                let end = lastAudioPTS.isValid ? CMTimeMaximum(lastPTS, lastAudioPTS) : lastPTS
+                writer.endSession(atSourceTime: CMTimeAdd(end, nominalDuration))
                 writer.finishWriting {
                     if writer.status != .completed {
                         let detail = writer.error?.localizedDescription ?? "The recording could not be finished."

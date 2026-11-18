@@ -26,6 +26,8 @@ final class ScrcpySession: @unchecked Sendable {
 
     var onSample: (@Sendable (CMSampleBuffer) -> Void)?
     var onSize: (@Sendable (Int, Int) -> Void)?
+    var onAudioConfig: (@Sendable (Data) -> Void)?
+    var onAudioFrame: (@Sendable (Data, Int64) -> Void)?
     var onEnd: (@Sendable (String?) -> Void)?
 
     private let adb: ADB
@@ -35,6 +37,8 @@ final class ScrcpySession: @unchecked Sendable {
     private var process: Process?
     private var listenFD: Int32 = -1
     private var connectionFD: Int32 = -1
+    private var audioFD: Int32 = -1
+    private(set) var audioConfig: Data?
     private let lock = NSLock()
     private var running = false
 
@@ -94,6 +98,10 @@ final class ScrcpySession: @unchecked Sendable {
         }
         Log.write("session: codec \(codecName)")
 
+        if settings.audio != .none {
+            startAudio(listener.fd)
+        }
+
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.readLoop(fd)
         }
@@ -104,6 +112,10 @@ final class ScrcpySession: @unchecked Sendable {
         if connectionFD >= 0 {
             close(connectionFD)
             connectionFD = -1
+        }
+        if audioFD >= 0 {
+            close(audioFD)
+            audioFD = -1
         }
         if listenFD >= 0 {
             close(listenFD)
@@ -127,7 +139,7 @@ final class ScrcpySession: @unchecked Sendable {
             "scid=\(scidHex)",
             "log_level=error",
             "video=true",
-            "audio=false",
+            "audio=\(settings.audio != .none)",
             "control=false",
             "tunnel_forward=false",
             "send_device_meta=false",
@@ -135,6 +147,10 @@ final class ScrcpySession: @unchecked Sendable {
             "max_fps=\(settings.fps)",
             "video_codec=\(settings.codec)"
         ]
+        if settings.audio != .none {
+            arguments.append("audio_codec=aac")
+            arguments.append("audio_source=\(settings.audio == .microphone ? "mic" : "output")")
+        }
         if settings.resolution != .native {
             arguments.append("max_size=\(settings.resolution.rawValue)")
         }
@@ -144,6 +160,62 @@ final class ScrcpySession: @unchecked Sendable {
             arguments.append("camera_fps=\(settings.fps)")
         }
         return arguments
+    }
+
+    private func startAudio(_ listener: Int32) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            do {
+                let fd = try self.acceptSync(listener, timeout: 10)
+                self.audioFD = fd
+                let codec = try self.readExactly(fd, 4)
+                let name = String(decoding: codec, as: UTF8.self)
+                guard name.hasSuffix("aac") else {
+                    Log.write("audio: device disabled the stream (\(name.debugDescription))")
+                    close(fd)
+                    return
+                }
+                Log.write("audio: codec \(name)")
+                self.readAudioLoop(fd)
+            } catch {
+                Log.write("audio: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func readAudioLoop(_ fd: Int32) {
+        var format: CMAudioFormatDescription?
+        var frames = 0
+
+        while isRunning {
+            guard let header = try? readExactly(fd, 12) else { break }
+            let bytes = [UInt8](header)
+            var field: UInt64 = 0
+            for index in 0..<8 { field = (field << 8) | UInt64(bytes[index]) }
+            let isConfig = field & 0x4000_0000_0000_0000 != 0
+            let pts = Int64(field & 0x1FFF_FFFF_FFFF_FFFF)
+            let size = Int(bytes[8]) << 24 | Int(bytes[9]) << 16 | Int(bytes[10]) << 8 | Int(bytes[11])
+            guard size > 0, size < 1024 * 1024 else { break }
+            guard let payload = try? readExactly(fd, size) else { break }
+
+            if isConfig {
+                Log.write("audio: config \(payload.count) bytes \(payload.map { String(format: "%02x", $0) }.joined())")
+                format = AudioFrames.formatDescription(asc: payload)
+                if format != nil {
+                    self.audioConfig = payload
+                    onAudioConfig?(payload)
+                }
+            } else if let format,
+                      let sample = AudioFrames.sampleBuffer(frame: payload, format: format, ptsMicros: pts) {
+                frames += 1
+                if frames == 1 || frames % 200 == 0 {
+                    Log.write("audio: frames=\(frames) pts=\(pts)")
+                }
+                onAudioFrame?(payload, pts)
+                _ = sample
+            }
+        }
+        Log.write("audio: loop ended after \(frames) frames")
     }
 
     // MARK: - Stream
@@ -230,7 +302,7 @@ final class ScrcpySession: @unchecked Sendable {
             close(fd)
             throw SessionError.socket("bind() failed: \(errno)")
         }
-        guard listen(fd, 1) == 0 else {
+        guard listen(fd, 2) == 0 else {
             close(fd)
             throw SessionError.socket("listen() failed: \(errno)")
         }
@@ -266,6 +338,15 @@ final class ScrcpySession: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    private func acceptSync(_ fd: Int32, timeout: Int) throws -> Int32 {
+        var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        let ready = poll(&descriptor, 1, Int32(timeout * 1000))
+        guard ready > 0 else { throw SessionError.timeout }
+        let connection = Darwin.accept(fd, nil, nil)
+        guard connection >= 0 else { throw SessionError.socket("accept() failed: \(errno)") }
+        return connection
     }
 
     private func readExactly(_ fd: Int32, _ count: Int) throws -> Data {

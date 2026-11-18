@@ -77,13 +77,15 @@ struct ContentView: View {
 
             Spacer()
 
-            if state.isRunning {
+            if state.isRunning || state.settings.target.recordsWebcam {
                 Button {
                     if state.isRecording {
                         Task { await state.stopRecording() }
                     } else {
-                        do { try state.startRecording() } catch {
-                            state.errorMessage = error.localizedDescription
+                        Task {
+                            do { try await state.startRecording() } catch {
+                                state.errorMessage = error.localizedDescription
+                            }
                         }
                     }
                 } label: {
@@ -153,6 +155,10 @@ struct ContentView: View {
         }
     }
 
+    private var recordingURLs: [URL] {
+        [state.lastRecording, state.lastWebcamRecording].compactMap { $0 }
+    }
+
     private func clock(from start: Date, to now: Date) -> String {
         let seconds = max(0, Int(now.timeIntervalSince(start)))
         return String(format: "%02d:%02d", seconds / 60, seconds % 60)
@@ -175,6 +181,29 @@ struct ContentView: View {
                         Text("Back").tag("back")
                         Text("Front").tag("front")
                         Text("External").tag("external")
+                    }
+                }
+            }
+            Section("Record") {
+                Picker("Source", selection: $state.settings.target) {
+                    ForEach(Settings.Target.allCases) { target in
+                        Text(target.rawValue).tag(target)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                if state.settings.target.recordsPhone {
+                    Picker("Phone audio", selection: $state.settings.audio) {
+                        ForEach(Settings.Audio.allCases) { audio in
+                            Text(audio.rawValue).tag(audio)
+                        }
+                    }
+                }
+
+                if state.settings.target.recordsWebcam {
+                    Picker("Mac camera", selection: $state.settings.webcamResolution) {
+                        Text("1080p").tag(1080)
+                        Text("4K").tag(2160)
                     }
                 }
             }
@@ -206,7 +235,7 @@ struct ContentView: View {
                     }
                 }
 
-                if let url = state.lastRecording, !state.isRecording {
+                ForEach(recordingURLs, id: \.self) { url in
                     Button {
                         NSWorkspace.shared.activateFileViewerSelecting([url])
                     } label: {
@@ -218,7 +247,7 @@ struct ContentView: View {
                     .help(url.path)
                 }
 
-                Text("Saved to Movies/Bezel. Video passes through without re-encoding.")
+                Text("Saved to Movies/Bezel. Phone video passes through without re-encoding.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

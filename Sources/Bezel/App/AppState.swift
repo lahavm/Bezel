@@ -9,6 +9,7 @@ final class AppState {
     let adb = ADB()
     let renderer = PreviewRenderer()
     let recorder = Recorder()
+    let webcamRecorder = WebcamRecorder()
 
     var devices: [Device] = []
     var selectedSerial: String?
@@ -21,6 +22,7 @@ final class AppState {
     var isRecording = false
     var recordStart: Date?
     var lastRecording: URL?
+    var lastWebcamRecording: URL?
 
     private var session: ScrcpySession?
     private var monitor: Task<Void, Never>?
@@ -28,7 +30,24 @@ final class AppState {
     private var lastDeviceLog = "unset"
 
     init() {
+        if ProcessInfo.processInfo.environment["BEZEL_SOURCE"] == "camera" {
+            settings.source = .camera
+        }
+        switch ProcessInfo.processInfo.environment["BEZEL_TARGET"] {
+        case "webcam": settings.target = .webcam
+        case "both": settings.target = .both
+        default: break
+        }
         Log.write("app: state created")
+        if settings.target == .webcam,
+           let seconds = Double(ProcessInfo.processInfo.environment["BEZEL_RECORD_SECONDS"] ?? ""), seconds > 0 {
+            Task { [weak self] in
+                guard let self else { return }
+                try? await self.startRecording()
+                try? await Task.sleep(for: .seconds(seconds))
+                await self.stopRecording()
+            }
+        }
     }
 
     var selectedDevice: Device? {
@@ -115,6 +134,18 @@ final class AppState {
                 }
             }
         }
+        session.onAudioConfig = { [weak self] asc in
+            Task { @MainActor in
+                guard let self, self.isRecording else { return }
+                self.recorder.configureAudio(asc: asc)
+            }
+        }
+        session.onAudioFrame = { [weak self] frame, pts in
+            Task { @MainActor in
+                guard let self, self.isRecording else { return }
+                self.recorder.appendAudio(frame: frame, ptsMicros: pts)
+            }
+        }
         session.onSize = { [weak self] width, height in
             Task { @MainActor in
                 self?.frameSize = CGSize(width: width, height: height)
@@ -132,10 +163,11 @@ final class AppState {
             status = "Live"
 
             if let seconds = Double(ProcessInfo.processInfo.environment["BEZEL_RECORD_SECONDS"] ?? ""), seconds > 0 {
-                try? startRecording()
                 Task { [weak self] in
+                    guard let self else { return }
+                    try? await self.startRecording()
                     try? await Task.sleep(for: .seconds(seconds))
-                    await self?.stopRecording()
+                    await self.stopRecording()
                 }
             }
         } catch {
@@ -149,27 +181,82 @@ final class AppState {
         }
     }
 
-    func startRecording() throws {
-        guard isRunning, !isRecording else { return }
-        let url = try recorder.start(fps: settings.fps)
-        lastRecording = url
+    func startRecording() async throws {
+        guard !isRecording else { return }
+        if settings.target.recordsPhone, !isRunning {
+            throw RecorderError.writer("Connect the phone before recording it.")
+        }
+
+        var startedURLs: [URL] = []
+
+        if settings.target.recordsPhone {
+            // The audio format has to be registered before the first video frame
+            // starts the writer, so give the device a moment to send it.
+            if settings.audio != .none, session?.audioConfig == nil {
+                for _ in 0..<30 where session?.audioConfig == nil {
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+            }
+            let url = try recorder.start(fps: settings.fps)
+            if let asc = session?.audioConfig {
+                recorder.configureAudio(asc: asc)
+            }
+            lastRecording = url
+            startedURLs.append(url)
+            Log.write("recording: phone \(url.path)")
+        }
+
+        if settings.target.recordsWebcam {
+            do {
+                let url = try await webcamRecorder.start(resolution: settings.webcamResolution, fps: settings.fps)
+                lastWebcamRecording = url
+                startedURLs.append(url)
+            } catch {
+                if !startedURLs.isEmpty {
+                    Task { _ = try? await recorder.finish() }
+                }
+                throw error
+            }
+        }
+
         recordStart = Date()
         isRecording = true
-        Log.write("recording: start \(url.path)")
+        Log.write("recording: start (\(startedURLs.count) file(s))")
     }
 
     func stopRecording() async {
         guard isRecording else { return }
         isRecording = false
         recordStart = nil
-        do {
-            let url = try await recorder.finish()
-            lastRecording = url
-            Log.write("recording: saved \(url.path)")
-            NSWorkspace.shared.activateFileViewerSelecting([url])
-        } catch {
-            Log.write("recording: failed \(error.localizedDescription)")
-            errorMessage = error.localizedDescription
+        var saved: [URL] = []
+
+        if settings.target.recordsPhone {
+            do {
+                let url = try await recorder.finish()
+                lastRecording = url
+                saved.append(url)
+                Log.write("recording: saved \(url.path)")
+            } catch {
+                Log.write("recording: phone failed \(error.localizedDescription)")
+                errorMessage = error.localizedDescription
+            }
+        }
+
+        if settings.target.recordsWebcam {
+            do {
+                let url = try await webcamRecorder.finish()
+                lastWebcamRecording = url
+                saved.append(url)
+                Log.write("recording: saved webcam \(url.path)")
+            } catch {
+                Log.write("recording: webcam failed \(error.localizedDescription)")
+                if errorMessage == nil { errorMessage = error.localizedDescription }
+            }
+            webcamRecorder.stopSession()
+        }
+
+        if !saved.isEmpty {
+            NSWorkspace.shared.activateFileViewerSelecting(saved)
         }
     }
 
