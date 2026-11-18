@@ -47,6 +47,9 @@ final class ScrcpySession: @unchecked Sendable {
         self.adb = adb
     }
 
+    var deviceSerial: String { device.serial }
+    var reverseTarget: String { "localabstract:\(socketName)" }
+
     private var socketName: String {
         "scrcpy_\(scidHex)"
     }
@@ -156,8 +159,19 @@ final class ScrcpySession: @unchecked Sendable {
         }
         if settings.source == .camera {
             arguments.append("video_source=camera")
-            arguments.append("camera_facing=\(settings.cameraFacing)")
+            if let cameraId = settings.cameraId {
+                arguments.append("camera_id=\(cameraId)")
+            } else {
+                arguments.append("camera_facing=\(settings.cameraFacing)")
+            }
             arguments.append("camera_fps=\(settings.fps)")
+            switch settings.resolution {
+            case .uhd: arguments.append("camera_size=3840x2160")
+            case .qhd: arguments.append("camera_size=2560x1440")
+            case .fhd: arguments.append("camera_size=1920x1080")
+            case .hd: arguments.append("camera_size=1280x720")
+            case .native: break
+            }
         }
         return arguments
     }

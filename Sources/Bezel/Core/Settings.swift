@@ -1,13 +1,13 @@
 import Foundation
 
-struct Settings: Sendable, Equatable {
-    enum Source: String, CaseIterable, Identifiable, Sendable {
+struct Settings: Sendable, Equatable, Codable {
+    enum Source: String, CaseIterable, Identifiable, Sendable, Codable {
         case screen = "Screen"
         case camera = "Camera"
         var id: String { rawValue }
     }
 
-    enum Resolution: Int, CaseIterable, Identifiable, Sendable {
+    enum Resolution: Int, CaseIterable, Identifiable, Sendable, Codable {
         case native = 0
         case uhd = 2160
         case qhd = 1440
@@ -26,14 +26,14 @@ struct Settings: Sendable, Equatable {
         }
     }
 
-    enum Audio: String, CaseIterable, Identifiable, Sendable {
+    enum Audio: String, CaseIterable, Identifiable, Sendable, Codable {
         case none = "None"
         case device = "Phone"
         case microphone = "Phone mic"
         var id: String { rawValue }
     }
 
-    enum Target: String, CaseIterable, Identifiable, Sendable {
+    enum Target: String, CaseIterable, Identifiable, Sendable, Codable {
         case phone = "Phone"
         case webcam = "Mac camera"
         case both = "Both"
@@ -46,8 +46,22 @@ struct Settings: Sendable, Equatable {
     var audio: Audio = .device
     var target: Target = .phone
     var webcamResolution: Int = 1080
+    var macMic = false
     var resolution: Resolution = .fhd
     var fps: Int = 60
     var codec: String = "h264"
     var cameraFacing: String = "back"
+    var cameraId: Int?
+
+    static func load() -> Settings {
+        guard let data = UserDefaults.standard.data(forKey: "bezel.settings"),
+              let decoded = try? JSONDecoder().decode(Settings.self, from: data)
+        else { return Settings() }
+        return decoded
+    }
+
+    func save() {
+        guard let data = try? JSONEncoder().encode(self) else { return }
+        UserDefaults.standard.set(data, forKey: "bezel.settings")
+    }
 }

@@ -10,10 +10,13 @@ final class AppState {
     let renderer = PreviewRenderer()
     let recorder = Recorder()
     let webcamRecorder = WebcamRecorder()
+    let micRecorder = MicRecorder()
 
     var devices: [Device] = []
     var selectedSerial: String?
-    var settings = Settings()
+    var settings = Settings.load() {
+        didSet { settings.save() }
+    }
     var status = "Plug in a device"
     var errorMessage: String?
     var isRunning = false
@@ -23,13 +26,27 @@ final class AppState {
     var recordStart: Date?
     var lastRecording: URL?
     var lastWebcamRecording: URL?
+    var lastMicRecording: URL?
+    var cameras: [CameraInfo] = []
 
     private var session: ScrcpySession?
     private var monitor: Task<Void, Never>?
     private var didAutoConnect = false
     private var lastDeviceLog = "unset"
+    private var probedSerial = ""
 
     init() {
+        switch ProcessInfo.processInfo.environment["BEZEL_RESOLUTION"] {
+        case "4k": settings.resolution = .uhd
+        case "1440p": settings.resolution = .qhd
+        case "1080p": settings.resolution = .fhd
+        case "720p": settings.resolution = .hd
+        case "native": settings.resolution = .native
+        default: break
+        }
+        if ProcessInfo.processInfo.environment["BEZEL_MACMIC"] == "1" {
+            settings.macMic = true
+        }
         if ProcessInfo.processInfo.environment["BEZEL_SOURCE"] == "camera" {
             settings.source = .camera
         }
@@ -37,6 +54,13 @@ final class AppState {
         case "webcam": settings.target = .webcam
         case "both": settings.target = .both
         default: break
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.shutdown() }
         }
         Log.write("app: state created")
         if settings.target == .webcam,
@@ -48,6 +72,16 @@ final class AppState {
                 await self.stopRecording()
             }
         }
+    }
+
+    static var serverJar: URL {
+        if let resources = Bundle.main.resourceURL {
+            let bundled = resources.appendingPathComponent("scrcpy-server.jar")
+            if FileManager.default.fileExists(atPath: bundled.path) { return bundled }
+        }
+        return URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("Vendor")
+            .appendingPathComponent("scrcpy-server-v\(ScrcpySession.serverVersion)")
     }
 
     var selectedDevice: Device? {
@@ -72,7 +106,6 @@ final class AppState {
 
     func refresh() async {
         guard !isRunning, !isConnecting else { return }
-        Log.write("refresh: start adb=\(adb.adbURL.path)")
         do {
             let found = try await adb.devices()
             devices = found
@@ -85,6 +118,18 @@ final class AppState {
                 selectedSerial = found.first(where: \.isReady)?.serial ?? found.first?.serial
             }
             if let device = selectedDevice {
+                if device.isReady, settings.source == .camera, probedSerial != device.serial {
+                    probedSerial = device.serial
+                    Task { [weak self] in
+                        guard let self else { return }
+                        let found = await self.adb.cameras(device.serial, jar: Self.serverJar, version: ScrcpySession.serverVersion)
+                        self.cameras = found
+                        if let current = self.settings.cameraId, !found.contains(where: { $0.id == current }) {
+                            self.settings.cameraId = nil
+                        }
+                        Log.write("cameras: \(found.map { "\($0.id):\($0.facing):\($0.size)" }.joined(separator: ","))")
+                    }
+                }
                 switch device.state {
                 case "device":
                     status = device.sdk > 0 ? "Android \(device.android) · ready" : "Ready"
@@ -181,6 +226,35 @@ final class AppState {
         }
     }
 
+    /// Stops the device process and the private adb daemon. Called on quit so
+    /// nothing of ours keeps running in the background.
+    func shutdown() {
+        Log.write("app: shutdown")
+        if let session {
+            adb.cleanupSync(
+                serial: session.deviceSerial,
+                remoteJar: ScrcpySession.remoteJar,
+                reverse: session.reverseTarget
+            )
+        }
+        session?.stop()
+        session = nil
+        guard adb.startedServer else { return }
+        let process = Process()
+        process.executableURL = adb.adbURL
+        process.arguments = ["kill-server"]
+        var environment = ProcessInfo.processInfo.environment
+        environment["ANDROID_USER_HOME"] = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Bezel/android").path
+
+        process.environment = environment
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
+    }
+
     func startRecording() async throws {
         guard !isRecording else { return }
         if settings.target.recordsPhone, !isRunning {
@@ -219,6 +293,17 @@ final class AppState {
             }
         }
 
+        if settings.macMic {
+            do {
+                let url = try await micRecorder.start()
+                lastMicRecording = url
+                startedURLs.append(url)
+            } catch {
+                Log.write("mic: failed \(error.localizedDescription)")
+                if errorMessage == nil { errorMessage = error.localizedDescription }
+            }
+        }
+
         recordStart = Date()
         isRecording = true
         Log.write("recording: start (\(startedURLs.count) file(s))")
@@ -253,6 +338,14 @@ final class AppState {
                 if errorMessage == nil { errorMessage = error.localizedDescription }
             }
             webcamRecorder.stopSession()
+        }
+
+        if settings.macMic {
+            if let url = micRecorder.stop() {
+                lastMicRecording = url
+                saved.append(url)
+                Log.write("mic: saved \(url.path)")
+            }
         }
 
         if !saved.isEmpty {

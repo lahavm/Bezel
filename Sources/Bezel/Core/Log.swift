@@ -15,6 +15,7 @@ enum Log {
         let line = "\(ISO8601DateFormatter().string(from: Date())) \(message)\n"
         queue.async {
             guard let data = line.data(using: .utf8) else { return }
+            rotateIfNeeded()
             if let handle = try? FileHandle(forWritingTo: url) {
                 defer { try? handle.close() }
                 try? handle.seekToEnd()
@@ -23,5 +24,16 @@ enum Log {
                 try? data.write(to: url)
             }
         }
+    }
+
+    /// Keeps the file small; one previous log is kept for debugging.
+    private static func rotateIfNeeded() {
+        let manager = FileManager.default
+        guard let attributes = try? manager.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? Int, size > 2_000_000
+        else { return }
+        let previous = url.deletingLastPathComponent().appendingPathComponent("bezel.old.log")
+        try? manager.removeItem(at: previous)
+        try? manager.moveItem(at: url, to: previous)
     }
 }

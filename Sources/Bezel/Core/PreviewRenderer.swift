@@ -27,7 +27,6 @@ final class PreviewRenderer {
         let now = Date()
         if now.timeIntervalSince(lastTick) >= 2 {
             framesPerSecond = Int(Double(frameCount) / now.timeIntervalSince(lastTick))
-            Log.write("renderer: \(framesPerSecond) fps status=\(renderer.status.rawValue)")
             frameCount = 0
             lastTick = now
         }

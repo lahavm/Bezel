@@ -12,6 +12,18 @@ struct Device: Identifiable, Hashable, Sendable {
     var isReady: Bool { state == "device" }
 }
 
+struct CameraInfo: Identifiable, Hashable, Sendable {
+    let id: Int
+    let facing: String
+    let size: String
+    let fps: String
+
+    var label: String {
+        let side = facing.prefix(1).uppercased() + facing.dropFirst()
+        return "\(side) · \(size)"
+    }
+}
+
 enum ADBError: LocalizedError {
     case toolNotFound
     case failed(String)
@@ -30,6 +42,10 @@ enum ADBError: LocalizedError {
 /// Uses a private key store and server port so it never touches the user's ~/.android.
 final class ADB: @unchecked Sendable {
     let adbURL: URL
+    /// Whether this run of the app spawned the adb daemon. Only then is it
+    /// ours to stop on quit.
+    private(set) var startedServer = false
+
     private let userHome: URL
 
     init() {
@@ -62,8 +78,8 @@ final class ADB: @unchecked Sendable {
 
     private func environment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
-        // Private key store when we start the daemon. If another adb server is
-        // already running on 5037, the client reuses it and its keys.
+        // Used only if this client has to start a daemon. An already running
+        // server keeps its own keys, so an authorized device stays authorized.
         env["ANDROID_USER_HOME"] = userHome.path
         return env
     }
@@ -116,9 +132,31 @@ final class ADB: @unchecked Sendable {
         }
     }
 
+    /// True when a daemon owned by anything else (Android Studio, Homebrew)
+    /// already answers on the default adb port.
+    private func serverIsRunning() -> Bool {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(5037).bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let result = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        return result == 0
+    }
+
     func startServer() async throws {
         guard FileManager.default.isExecutableFile(atPath: adbURL.path) else {
             throw ADBError.toolNotFound
+        }
+        if serverIsRunning() {
+            return
         }
         let process = process(["start-server"])
         // The daemon inherits the pipe, so a captured stdout would never close.
@@ -128,6 +166,7 @@ final class ADB: @unchecked Sendable {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             process.terminationHandler = { finished in
                 if finished.terminationStatus == 0 {
+                    self.startedServer = true
                     continuation.resume()
                 } else {
                     continuation.resume(throwing: ADBError.failed("adb start-server failed"))
@@ -184,6 +223,28 @@ final class ADB: @unchecked Sendable {
         _ = try await run(["-s", serial, "push", local.path, remote])
     }
 
+    /// Synchronous variant for app termination, where async work would be cut off.
+    @discardableResult
+    func runSync(_ arguments: [String]) -> Bool {
+        guard FileManager.default.isExecutableFile(atPath: adbURL.path) else { return false }
+        let process = process(arguments)
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return false
+        }
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+    }
+
+    func cleanupSync(serial: String, remoteJar: String, reverse: String) {
+        runSync(["-s", serial, "shell", "rm", "-f", remoteJar])
+        runSync(["-s", serial, "reverse", "--remove", reverse])
+    }
+
     func remove(_ serial: String, remote: String) async {
         _ = try? await run(["-s", serial, "shell", "rm", "-f", remote])
     }
@@ -194,6 +255,41 @@ final class ADB: @unchecked Sendable {
 
     func removeReverse(_ serial: String, remote: String) async {
         _ = try? await run(["-s", serial, "reverse", "--remove", remote])
+    }
+
+    /// Asks the device which cameras it exposes and what they support.
+    func cameras(_ serial: String, jar: URL, version: String) async -> [CameraInfo] {
+        let remote = "/data/local/tmp/bezel-camera-probe.jar"
+        do {
+            try await push(serial, local: jar, remote: remote)
+            let command = "CLASSPATH=\(remote) app_process / com.genymobile.scrcpy.Server "
+                + "\(version) list_cameras=true log_level=info audio=false video=false control=false"
+            let output = try await shellCommand(serial, command)
+            await remove(serial, remote: remote)
+            return parseCameras(output)
+        } catch {
+            Log.write("cameras: probe failed \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    private func parseCameras(_ output: String) -> [CameraInfo] {
+        var cameras: [CameraInfo] = []
+        for line in output.split(separator: "\n") where line.contains("--camera-id=") {
+            guard let idRange = line.range(of: "--camera-id=") else { continue }
+            let rest = line[idRange.upperBound...]
+            let parts = rest.split(separator: "(", maxSplits: 1)
+            guard parts.count == 2, let id = Int(parts[0].trimmingCharacters(in: .whitespaces)) else { continue }
+            let fields = parts[1].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            guard fields.count >= 3 else { continue }
+            let fps = fields[2]
+                .replacingOccurrences(of: "fps={", with: "")
+                .replacingOccurrences(of: "}", with: "")
+                .replacingOccurrences(of: " ", with: "")
+            let size = fields[1].replacingOccurrences(of: " ", with: "")
+            cameras.append(CameraInfo(id: id, facing: fields[0], size: size, fps: fps))
+        }
+        return cameras
     }
 
     func launchServer(_ serial: String, classpath: String, arguments: [String]) throws -> Process {

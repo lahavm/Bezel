@@ -156,7 +156,7 @@ struct ContentView: View {
     }
 
     private var recordingURLs: [URL] {
-        [state.lastRecording, state.lastWebcamRecording].compactMap { $0 }
+        [state.lastRecording, state.lastWebcamRecording, state.lastMicRecording].compactMap { $0 }
     }
 
     private func clock(from start: Date, to now: Date) -> String {
@@ -177,10 +177,19 @@ struct ContentView: View {
                 .pickerStyle(.segmented)
 
                 if state.settings.source == .camera {
-                    Picker("Lens", selection: $state.settings.cameraFacing) {
-                        Text("Back").tag("back")
-                        Text("Front").tag("front")
-                        Text("External").tag("external")
+                    if state.cameras.isEmpty {
+                        Picker("Lens", selection: $state.settings.cameraFacing) {
+                            Text("Back").tag("back")
+                            Text("Front").tag("front")
+                            Text("External").tag("external")
+                        }
+                    } else {
+                        Picker("Lens", selection: $state.settings.cameraId) {
+                            Text("Auto").tag(Int?.none)
+                            ForEach(state.cameras) { camera in
+                                Text(camera.label).tag(Int?.some(camera.id))
+                            }
+                        }
                     }
                 }
             }
@@ -206,6 +215,8 @@ struct ContentView: View {
                         Text("4K").tag(2160)
                     }
                 }
+
+                Toggle("Record Mac microphone", isOn: $state.settings.macMic)
             }
             .disabled(state.isRunning)
 
