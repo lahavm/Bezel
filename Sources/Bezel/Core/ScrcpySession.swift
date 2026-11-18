@@ -24,7 +24,7 @@ final class ScrcpySession: @unchecked Sendable {
     static let serverVersion = "5.0.1"
     static let remoteJar = "/data/local/tmp/bezel-server-\(serverVersion).jar"
 
-    var onSample: (@Sendable (CMSampleBuffer) -> Void)?
+    var onSample: (@Sendable (CMSampleBuffer, Bool) -> Void)?
     var onSize: (@Sendable (Int, Int) -> Void)?
     var onAudioConfig: (@Sendable (Data) -> Void)?
     var onAudioFrame: (@Sendable (Data, Int64) -> Void)?
@@ -274,7 +274,7 @@ final class ScrcpySession: @unchecked Sendable {
                 if samples == 1 || samples % 120 == 0 {
                     Log.write("session: samples=\(samples) pts=\(pts)")
                 }
-                onSample?(sample)
+                onSample?(sample, H264Frames.isKeyframe(avcc: avcc))
             }
         }
 

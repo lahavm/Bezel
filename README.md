@@ -5,7 +5,7 @@ Self-contained: the app bundles its own `adb` and the scrcpy server, so nothing
 has to be installed on the Mac (beyond macOS 26) or on the device.
 
 Status: mirroring, phone screen/camera recording, phone audio, Mac microphone
-and (external) Mac camera recording work. Touch/keyboard control is not
+and picture-in-picture with an (external) Mac camera work. Touch/keyboard control is not
 implemented.
 
 ## Features
@@ -14,11 +14,14 @@ implemented.
   reconnecting. Native refresh rate, or 30/60 fps; 720p, 1080p, 1440p, 4K or
   native resolution; H.264 or HEVC.
 - Record the phone with no re-encoding, with phone audio or the phone mic.
-- Record the Mac camera (1080p or 4K) and the Mac microphone.
-- "Both" turns the Mac camera into a corner overlay in the phone video. Turn on
-  "Separate files" to get two files instead.
+- "Phone + Mac camera" turns the Mac camera into a corner overlay in the
+  phone video, shown live in the preview. The Mac camera is recorded at the
+  size it delivers (1080p on the built-in one). Turn on "Separate files" to
+  get two files instead.
 - The Mac microphone is mixed into the same MP4 as one normal audio track.
 - Screenshots at the mirrored resolution.
+- Recordings start at a keyframe (up to a second after pressing record), which
+  keeps the files seekable.
 - Full-screen preview with the controls hidden.
 - Choose the recordings folder (defaults to `~/Movies/Bezel`).
 

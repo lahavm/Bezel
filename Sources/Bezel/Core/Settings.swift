@@ -35,17 +35,15 @@ struct Settings: Sendable, Equatable, Codable {
 
     enum Target: String, CaseIterable, Identifiable, Sendable, Codable {
         case phone = "Phone"
-        case webcam = "Mac camera"
         case both = "Both"
         var id: String { rawValue }
-        var recordsPhone: Bool { self == .phone || self == .both }
-        var recordsWebcam: Bool { self == .webcam || self == .both }
+        var recordsWebcam: Bool { self == .both }
+        var label: String { self == .phone ? "Phone" : "Phone + Mac camera" }
     }
 
     var source: Source = .screen
     var audio: Audio = .device
     var target: Target = .phone
-    var webcamResolution: Int = 1080
     var macMic = false
     /// nil means Auto: the connected external mic, else the system default.
     var micId: String?

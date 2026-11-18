@@ -186,11 +186,17 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
         }
     }
 
-    func append(_ sample: CMSampleBuffer) {
+    func append(_ sample: CMSampleBuffer, isKeyframe: Bool) {
         queue.async { [self] in
             guard let writer, writer.status == .writing || writer.status == .unknown else { return }
             let pts = CMSampleBufferGetPresentationTimeStamp(sample)
             guard pts.isValid else { return }
+            // Recording can start mid-GOP; leading P-frames reference a picture
+            // that is not in the file and make the whole track unreadable.
+            if !started, !isKeyframe {
+                skippedFrames += 1
+                return
+            }
 
             if input == nil {
                 guard let format = CMSampleBufferGetFormatDescription(sample) else { return }
@@ -213,9 +219,16 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
                 writer.startSession(atSourceTime: pts)
                 sessionStartPTS = pts
                 started = true
+                Log.write("recorder: started at keyframe, skipped \(skippedFrames)")
             }
 
             if let previous = pending, pendingPTS.isValid {
+                // While the writer is busy, keep the pending frame and drop this
+                // one: the first frame is the keyframe and must not be lost.
+                guard input?.isReadyForMoreMediaData == true else {
+                    droppedFrames += 1
+                    return
+                }
                 let gap = CMTimeSubtract(pts, pendingPTS)
                 let duration = (gap.isValid && gap > .zero && gap < CMTime(value: 2, timescale: 1)) ? gap : nominalDuration
                 appendCopied(previous, duration: duration)
@@ -234,6 +247,9 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
                     return
                 }
                 if let previous = pending, pendingPTS.isValid {
+                    for _ in 0..<100 where input?.isReadyForMoreMediaData != true {
+                        usleep(2000)
+                    }
                     appendCopied(previous, duration: nominalDuration)
                 }
                 pending = nil
@@ -257,6 +273,7 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
                     return
                 }
 
+                Log.write("recorder: finished, skipped \(skippedFrames), dropped \(droppedFrames)")
                 input?.markAsFinished()
                 audio?.markAsFinished()
                 mic?.markAsFinished()
@@ -276,11 +293,11 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
         }
     }
 
+    private var skippedFrames = 0
+    private var droppedFrames = 0
+
     private func appendCopied(_ sample: CMSampleBuffer, duration: CMTime) {
-        guard let input, input.isReadyForMoreMediaData else {
-            pending = nil
-            return
-        }
+        guard let input, input.isReadyForMoreMediaData else { return }
         var timing = CMSampleTimingInfo(
             duration: duration,
             presentationTimeStamp: CMSampleBufferGetPresentationTimeStamp(sample),

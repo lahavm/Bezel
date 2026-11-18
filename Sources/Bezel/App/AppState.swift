@@ -11,6 +11,7 @@ final class AppState {
     let renderer = PreviewRenderer()
     let recorder = Recorder()
     let webcamRecorder = WebcamRecorder()
+    let webcamPreview = WebcamPreview()
     let snapshotter = Snapshotter()
 
     var devices: [Device] = []
@@ -54,7 +55,6 @@ final class AppState {
             settings.source = .camera
         }
         switch ProcessInfo.processInfo.environment["BEZEL_TARGET"] {
-        case "webcam": settings.target = .webcam
         case "both": settings.target = .both
         default: break
         }
@@ -66,8 +66,7 @@ final class AppState {
             MainActor.assumeIsolated { self?.shutdown() }
         }
         Log.write("app: state created")
-        if settings.target == .webcam,
-           let seconds = Double(ProcessInfo.processInfo.environment["BEZEL_RECORD_SECONDS"] ?? ""), seconds > 0 {
+        if let seconds = Double(ProcessInfo.processInfo.environment["BEZEL_RECORD_SECONDS"] ?? ""), seconds > 0 {
             Task { [weak self] in
                 guard let self else { return }
                 try? await self.startRecording()
@@ -107,7 +106,17 @@ final class AppState {
         }
     }
 
+    /// Shows the Mac camera overlay whenever a Mac camera is part of the recording.
+    func syncWebcamPreview() {
+        if settings.target.recordsWebcam {
+            webcamPreview.start()
+        } else {
+            webcamPreview.stop()
+        }
+    }
+
     func refresh() async {
+        syncWebcamPreview()
         let mics = Microphone.devices()
         if mics != microphones {
             microphones = mics
@@ -181,12 +190,12 @@ final class AppState {
         status = "Connecting…"
 
         let session = ScrcpySession(device: device, adb: adb)
-        session.onSample = { [weak self, weak session] sample in
+        session.onSample = { [weak self, weak session] sample, isKeyframe in
             Task { @MainActor in
                 guard let self, let session, self.session === session else { return }
                 self.renderer.enqueue(sample)
                 if self.isRecording {
-                    self.recorder.append(sample)
+                    self.recorder.append(sample, isKeyframe: isKeyframe)
                 }
             }
         }
@@ -246,6 +255,7 @@ final class AppState {
     /// nothing of ours keeps running in the background.
     func shutdown() {
         Log.write("app: shutdown")
+        webcamPreview.stop()
         if let session {
             adb.cleanupSync(
                 serial: session.deviceSerial,
@@ -321,11 +331,8 @@ final class AppState {
 
     func startRecording() async throws {
         guard !isRecording else { return }
-        if settings.target.recordsPhone, !isRunning {
+        if !isRunning {
             throw RecorderError.writer("Connect the phone before recording it.")
-        }
-        if settings.target.recordsWebcam, !settings.target.recordsPhone, !settings.macMic, false {
-            throw RecorderError.writer("Nothing is selected for recording.")
         }
 
         let directory = settings.outputDirectory
@@ -337,34 +344,29 @@ final class AppState {
             }
         }
 
-        if settings.target.recordsPhone {
-            // The audio format has to be registered before the first video frame
-            // starts the writer, so give the device a moment to send it.
-            if settings.audio != .none, session?.audioConfig == nil {
-                for _ in 0..<30 where session?.audioConfig == nil {
-                    try? await Task.sleep(for: .milliseconds(50))
-                }
+        // The audio format has to be registered before the first video frame
+        // starts the writer, so give the device a moment to send it.
+        if settings.audio != .none, session?.audioConfig == nil {
+            for _ in 0..<30 where session?.audioConfig == nil {
+                try? await Task.sleep(for: .milliseconds(50))
             }
-            let url = try recorder.start(fps: settings.fps, directory: directory)
-            if let asc = session?.audioConfig {
-                recorder.configureAudio(asc: asc)
-            }
-            if settings.macMic {
-                try recorder.startMicrophone(id: settings.micId)
-            }
-            lastRecording = url
-            startedURLs.append(url)
-            Log.write("recording: phone \(url.path)")
         }
+        let phoneURL = try recorder.start(fps: settings.fps, directory: directory)
+        if let asc = session?.audioConfig {
+            recorder.configureAudio(asc: asc)
+        }
+        if settings.macMic {
+            try recorder.startMicrophone(id: settings.micId)
+        }
+        lastRecording = phoneURL
+        startedURLs.append(phoneURL)
+        Log.write("recording: phone \(phoneURL.path)")
 
         if settings.target.recordsWebcam {
             do {
                 let url = try await webcamRecorder.start(
-                    resolution: settings.webcamResolution,
                     fps: max(30, settings.fps),
-                    directory: directory,
-                    microphone: settings.macMic && !settings.target.recordsPhone,
-                    micId: settings.micId
+                    directory: directory
                 )
                 lastWebcamRecording = url
                 startedURLs.append(url)
@@ -389,17 +391,15 @@ final class AppState {
         var phoneURL: URL?
         var webcamURL: URL?
 
-        if settings.target.recordsPhone {
-            do {
-                let url = try await recorder.finish()
-                lastRecording = url
-                phoneURL = url
-                saved.append(url)
-                Log.write("recording: saved \(url.path)")
-            } catch {
-                Log.write("recording: phone failed \(error.localizedDescription)")
-                errorMessage = error.localizedDescription
-            }
+        do {
+            let url = try await recorder.finish()
+            lastRecording = url
+            phoneURL = url
+            saved.append(url)
+            Log.write("recording: saved \(url.path)")
+        } catch {
+            Log.write("recording: phone failed \(error.localizedDescription)")
+            errorMessage = error.localizedDescription
         }
 
         if settings.target.recordsWebcam {

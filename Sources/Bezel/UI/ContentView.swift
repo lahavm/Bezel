@@ -32,6 +32,7 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
             isFullScreen = false
         }
+        .onChange(of: state.settings.target) { state.syncWebcamPreview() }
         .onChange(of: state.settings.source) { state.restartSession() }
         .onChange(of: state.settings.cameraId) { state.restartSession() }
         .onChange(of: state.settings.resolution) { state.restartSession() }
@@ -99,6 +100,17 @@ struct ContentView: View {
             .buttonStyle(.borderless)
             .help("Refresh devices")
 
+            Button(state.isRunning ? "Stop" : "Connect") {
+                if state.isRunning {
+                    state.disconnect()
+                } else {
+                    Task { await state.connect() }
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(state.isRunning ? false : !state.canConnect)
+            .keyboardShortcut(.return, modifiers: .command)
+
             Spacer()
 
             Circle()
@@ -122,7 +134,7 @@ struct ContentView: View {
                 .help("Screenshot (⌘S)")
             }
 
-            if state.isRunning || state.settings.target.recordsWebcam {
+            if state.isRunning {
                 Button {
                     state.toggleRecording()
                 } label: {
@@ -142,25 +154,31 @@ struct ContentView: View {
             .buttonStyle(.borderless)
             .help("Full screen (⌃⌘F)")
 
-            Button(state.isRunning ? "Stop" : "Connect") {
-                if state.isRunning {
-                    state.disconnect()
-                } else {
-                    Task { await state.connect() }
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(state.isRunning ? false : !state.canConnect)
-            .keyboardShortcut(.return, modifiers: .command)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    /// The Mac camera in the bottom-right corner, matching what the PiP export
+    /// writes.
+    private var cameraPreview: some View {
+        GeometryReader { geo in
+            WebcamPreviewView(session: state.webcamPreview.session)
+                .frame(width: geo.size.width * 0.28, height: geo.size.width * 0.28 * 9 / 16)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .padding(geo.size.width * 0.04)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+        }
     }
 
     private var preview: some View {
         ZStack {
             Color.black
             PreviewView(layer: state.renderer.layer)
+
+            if state.settings.target.recordsWebcam {
+                cameraPreview
+            }
 
             if !state.isRunning && !state.isComposing {
                 VStack(spacing: 10) {
@@ -282,32 +300,23 @@ struct ContentView: View {
             }
 
             Section("Record") {
-                Picker("Source", selection: $state.settings.target) {
+                Picker("Output", selection: $state.settings.target) {
                     ForEach(Settings.Target.allCases) { target in
-                        Text(target.rawValue).tag(target)
+                        Text(target.label).tag(target)
                     }
                 }
                 .pickerStyle(.segmented)
 
-                if state.settings.target.recordsPhone {
-                    Picker("Phone audio", selection: $state.settings.audio) {
-                        ForEach(Settings.Audio.allCases) { audio in
-                            Text(audio.rawValue).tag(audio)
-                        }
+                Picker("Phone audio", selection: $state.settings.audio) {
+                    ForEach(Settings.Audio.allCases) { audio in
+                        Text(audio.rawValue).tag(audio)
                     }
-                    .disabled(state.isRunning)
                 }
+                .disabled(state.isRunning)
 
                 if state.settings.target.recordsWebcam {
-                    Picker("Mac camera", selection: $state.settings.webcamResolution) {
-                        Text("1080p").tag(1080)
-                        Text("4K").tag(2160)
-                    }
-
-                    if state.settings.target == .both {
-                        Toggle("Separate files", isOn: $state.settings.separateFiles)
-                            .help("Off: one video with the Mac camera in the corner.")
-                    }
+                    Toggle("Separate files", isOn: $state.settings.separateFiles)
+                        .help("Off: one video with the Mac camera in the corner.")
                 }
 
                 Toggle("Record Mac microphone", isOn: $state.settings.macMic)

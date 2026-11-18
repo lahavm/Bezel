@@ -20,16 +20,15 @@ enum WebcamError: LocalizedError {
 
 /// Records the built-in Mac camera to its own H.264 file.
 /// Kept separate from the phone recording so the phone stream stays untouched.
-final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
+final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let session = AVCaptureSession()
     private let output = AVCaptureVideoDataOutput()
-    private let audioOutput = AVCaptureAudioDataOutput()
     private let queue = DispatchQueue(label: "bezel.webcam")
     private let writeQueue = DispatchQueue(label: "bezel.webcam.writer")
 
     private var writer: AVAssetWriter?
     private var input: AVAssetWriterInput?
-    private var audioInput: AVAssetWriterInput?
+    private var fps = 30
     private var started = false
     private var frames = 0
     private var lastPTS: CMTime = .invalid
@@ -40,7 +39,7 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         writeQueue.sync { writer != nil }
     }
 
-    func start(resolution: Int, fps: Int, directory: URL, microphone: Bool = false, micId: String? = nil) async throws -> URL {
+    func start(fps: Int, directory: URL) async throws -> URL {
         Log.write("webcam: requesting camera access")
         guard await AVCaptureDevice.requestAccess(for: .video) else {
             Log.write("webcam: access denied")
@@ -52,12 +51,8 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
             mediaType: .video,
             position: .unspecified
         )
-        let cameras = discovery.devices
-        Log.write("webcam: devices \(cameras.map(\.localizedName).joined(separator: ", "))")
-        // Prefer an external camera: it keeps working with the lid closed.
-        guard let device = cameras.first(where: { $0.deviceType == .external })
-                ?? cameras.first(where: { $0.deviceType == .builtInWideAngleCamera })
-                ?? cameras.first else {
+        Log.write("webcam: devices \(discovery.devices.map(\.localizedName).joined(separator: ", "))")
+        guard let device = Camera.preferred() else {
             throw WebcamError.noCamera
         }
         Log.write("webcam: using \(device.localizedName) (\(device.deviceType.rawValue))")
@@ -68,36 +63,6 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         let fileURL = directory.appendingPathComponent("Bezel Mac \(formatter.string(from: Date())).mp4")
 
         let writer = try AVAssetWriter(outputURL: fileURL, fileType: .mp4)
-        let width = resolution >= 2160 ? 3840 : 1920
-        let height = resolution >= 2160 ? 2160 : 1080
-        let bitrate = resolution >= 2160 ? 40_000_000 : 14_000_000
-        let compress: [String: Any] = [
-            AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: width,
-            AVVideoHeightKey: height,
-            AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: bitrate,
-                AVVideoMaxKeyFrameIntervalKey: fps * 2,
-                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
-            ]
-        ]
-        let input = AVAssetWriterInput(mediaType: .video, outputSettings: compress)
-        input.expectsMediaDataInRealTime = true
-        guard writer.canAdd(input) else { throw WebcamError.configuration("The writer rejected the camera input.") }
-        writer.add(input)
-
-        var microphoneInput: AVAssetWriterInput?
-        if microphone {
-            let settings: [String: Any] = [
-                AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: 48_000,
-                AVNumberOfChannelsKey: 1,
-                AVEncoderBitRateKey: 128_000
-            ]
-            let audio = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
-            audio.expectsMediaDataInRealTime = true
-            if writer.canAdd(audio) { writer.add(audio); microphoneInput = audio }
-        }
 
         session.beginConfiguration()
         let captureInput = try AVCaptureDeviceInput(device: device)
@@ -116,23 +81,12 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         }
         session.addOutput(output)
 
-        if microphone,
-           let device = Microphone.device(id: micId),
-           let audioDeviceInput = try? AVCaptureDeviceInput(device: device) {
-            audioOutput.setSampleBufferDelegate(self, queue: queue)
-            if session.canAddInput(audioDeviceInput), session.canAddOutput(audioOutput) {
-                session.addInput(audioDeviceInput)
-                session.addOutput(audioOutput)
-            } else {
-                Log.write("webcam: microphone could not be attached")
-            }
-        }
         session.commitConfiguration()
 
         writeQueue.sync {
             self.writer = writer
-            self.input = input
-            self.audioInput = microphoneInput
+            self.input = nil
+            self.fps = fps
             self.url = fileURL
             self.started = false
             self.frames = 0
@@ -142,29 +96,44 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         session.startRunning()
         let connection = output.connection(with: .video)
         Log.write("webcam: running=\(session.isRunning) connection=\(connection != nil) enabled=\(connection?.isEnabled ?? false)")
-        Log.write("webcam: recording \(width)x\(height) at \(fps) fps to \(fileURL.lastPathComponent)")
+        Log.write("webcam: recording to \(fileURL.lastPathComponent)")
         return fileURL
     }
 
-    private func configure(device: AVCaptureDevice, resolution: Int, fps: Int) throws {
-    }
-
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        if output === audioOutput {
-            writeQueue.async { [self] in
-                guard started, let audioInput, audioInput.isReadyForMoreMediaData else { return }
-                audioInput.append(sampleBuffer)
-            }
-            return
-        }
-
         let seen = writeQueue.sync { frames }
         if seen == 0 { Log.write("webcam: first capture callback") }
         writeQueue.async { [self] in
             guard let writer, writer.status == .writing || writer.status == .unknown else { return }
-            guard let input else { return }
             let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             guard pts.isValid else { return }
+
+            if input == nil {
+                // Encode at whatever size the camera delivers; there is no
+                // reliable way to guess it from the device.
+                guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+                let width = CVPixelBufferGetWidth(buffer)
+                let height = CVPixelBufferGetHeight(buffer)
+                let compress: [String: Any] = [
+                    AVVideoCodecKey: AVVideoCodecType.h264,
+                    AVVideoWidthKey: width,
+                    AVVideoHeightKey: height,
+                    AVVideoCompressionPropertiesKey: [
+                        AVVideoAverageBitRateKey: width * height > 1920 * 1080 ? 40_000_000 : 14_000_000,
+                        AVVideoMaxKeyFrameIntervalKey: fps * 2,
+                        AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
+                    ]
+                ]
+                let created = AVAssetWriterInput(mediaType: .video, outputSettings: compress)
+                created.expectsMediaDataInRealTime = true
+                guard writer.canAdd(created) else {
+                    Log.write("webcam: writer rejected the video input")
+                    return
+                }
+                writer.add(created)
+                input = created
+            }
+            guard let input else { return }
 
             if !started {
                 guard writer.startWriting() else {
@@ -194,10 +163,8 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
                     return
                 }
                 let input = self.input
-                let audio = self.audioInput
                 let captured = started && frames > 0
                 self.input = nil
-                self.audioInput = nil
                 self.writer = nil
 
                 guard captured else {
@@ -208,7 +175,6 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
                 }
 
                 input?.markAsFinished()
-                audio?.markAsFinished()
                 writer.endSession(atSourceTime: CMTimeAdd(lastPTS, CMTime(value: 1, timescale: 30)))
                 writer.finishWriting {
                     if writer.status != .completed {

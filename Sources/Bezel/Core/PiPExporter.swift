@@ -60,7 +60,7 @@ enum PiPExporter {
         let targetWidth = renderSize.width * 0.28
         let scale = targetWidth / max(1, webcamNatural.width)
         let x = renderSize.width - targetWidth - inset
-        let y = inset
+        let y = renderSize.height - webcamNatural.height * scale - inset
 
         let phoneLayer = AVMutableVideoCompositionLayerInstruction(assetTrack: phoneCompositionTrack)
         phoneLayer.setTransform(phoneTransform, at: .zero)
@@ -71,7 +71,8 @@ enum PiPExporter {
 
         let instruction = AVMutableVideoCompositionInstruction()
         instruction.timeRange = range
-        instruction.layerInstructions = [phoneLayer, webcamLayer]
+        // Layer instructions are listed front to back.
+        instruction.layerInstructions = [webcamLayer, phoneLayer]
 
         let videoComposition = AVMutableVideoComposition()
         videoComposition.renderSize = renderSize
