@@ -61,6 +61,16 @@ Vendor/       adb + scrcpy-server (downloaded, not committed)
 Scripts/      fetch-vendor.sh, build-app.sh
 ```
 
+## Known limitations
+
+- No touch, keyboard or clipboard control (viewing and recording only).
+- "Both" records two files rather than compositing a picture-in-picture video.
+- 4K60 is limited by the phone's encoder and the fanless Mac; the frame-rate
+  readout shows what actually arrives.
+- Some phones expose only their main and front cameras, so ultrawide or tele
+  lenses appear only when Android lists them.
+- macOS 26 or newer is required.
+
 ## Third-party software
 
 - scrcpy (Apache-2.0), Genymobile — server jar, pinned to 5.0.1.

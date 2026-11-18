@@ -218,7 +218,7 @@ struct ContentView: View {
 
                 Toggle("Record Mac microphone", isOn: $state.settings.macMic)
             }
-            .disabled(state.isRunning)
+            .disabled(state.isRunning || state.isRecording)
 
             Section("Quality") {
                 Picker("Resolution", selection: $state.settings.resolution) {
@@ -235,7 +235,7 @@ struct ContentView: View {
                     Text("HEVC").tag("h265")
                 }
             }
-            .disabled(state.isRunning)
+            .disabled(state.isRunning || state.isRecording)
 
             Section("Recording") {
                 if state.isRecording, let start = state.recordStart {
