@@ -13,6 +13,9 @@ final class AppState {
     let webcamRecorder = WebcamRecorder()
     let webcamPreview = WebcamPreview()
     let snapshotter = Snapshotter()
+    let phoneMeter = PhoneAudioMeter()
+    let micMeter = MicLevelMonitor()
+    let phonePlayer = PhoneAudioPlayer()
 
     var devices: [Device] = []
     var selectedSerial: String?
@@ -30,6 +33,8 @@ final class AppState {
     var lastWebcamRecording: URL?
     var lastScreenshot: URL?
     var isComposing = false
+    var phoneLevel: Float = 0
+    var micLevel: Float = 0
     var cameras: [CameraInfo] = []
     var microphones: [MicInfo] = []
 
@@ -38,6 +43,10 @@ final class AppState {
     private var didAutoConnect = false
     private var lastDeviceLog = "unset"
     private var probedSerial = ""
+    private var recordingHasPhoneAudio = false
+    private var recordingHasMicInPhone = false
+    private var recordingUsesWebcamMic = false
+    private var recordingPhoneVolume: Float = 1
 
     init() {
         switch ProcessInfo.processInfo.environment["BEZEL_RESOLUTION"] {
@@ -51,12 +60,45 @@ final class AppState {
         if ProcessInfo.processInfo.environment["BEZEL_MACMIC"] == "1" {
             settings.macMic = true
         }
+        if let value = Double(ProcessInfo.processInfo.environment["BEZEL_PHONEVOL"] ?? "") {
+            settings.phoneVolume = value
+        }
+        if let value = Double(ProcessInfo.processInfo.environment["BEZEL_MICVOL"] ?? "") {
+            settings.micVolume = value
+        }
+        if ProcessInfo.processInfo.environment["BEZEL_BLUR"] == "1" {
+            settings.webcamBlur = true
+        }
+        switch ProcessInfo.processInfo.environment["BEZEL_SHAPE"] {
+        case "circle": settings.webcamShape = .circle
+        case "heart": settings.webcamShape = .heart
+        case "rectangle": settings.webcamShape = .rectangle
+        default: break
+        }
+        if let value = Double(ProcessInfo.processInfo.environment["BEZEL_SCALE"] ?? "") {
+            settings.webcamScale = value
+        }
+        switch ProcessInfo.processInfo.environment["BEZEL_SIZE"] {
+        case "small": settings.webcamSize = .small
+        case "large": settings.webcamSize = .large
+        case "medium": settings.webcamSize = .medium
+        default: break
+        }
+        if let value = Double(ProcessInfo.processInfo.environment["BEZEL_CAMX"] ?? "") {
+            settings.webcamX = value
+        }
+        if let value = Double(ProcessInfo.processInfo.environment["BEZEL_CAMY"] ?? "") {
+            settings.webcamY = value
+        }
         if ProcessInfo.processInfo.environment["BEZEL_SOURCE"] == "camera" {
             settings.source = .camera
         }
         switch ProcessInfo.processInfo.environment["BEZEL_TARGET"] {
         case "both": settings.target = .both
         default: break
+        }
+        if ProcessInfo.processInfo.environment["BEZEL_SEPARATE"] == "1" {
+            settings.separateFiles = true
         }
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
@@ -65,15 +107,19 @@ final class AppState {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.shutdown() }
         }
-        Log.write("app: state created")
-        if let seconds = Double(ProcessInfo.processInfo.environment["BEZEL_RECORD_SECONDS"] ?? ""), seconds > 0 {
-            Task { [weak self] in
-                guard let self else { return }
-                try? await self.startRecording()
-                try? await Task.sleep(for: .seconds(seconds))
-                await self.stopRecording()
-            }
+        phoneMeter.onLevel = { [weak self] level in
+            Task { @MainActor in self?.phoneLevel = level }
         }
+        phoneMeter.onFormat = { [weak self] sampleRate, channels in
+            self?.phonePlayer.configure(sampleRate: sampleRate, channels: channels)
+        }
+        phoneMeter.onPCM = { [weak self] samples, frameCount, channels in
+            self?.phonePlayer.play(samples: samples, frameCount: frameCount, channels: channels)
+        }
+        micMeter.onLevel = { [weak self] level in
+            Task { @MainActor in self?.micLevel = level }
+        }
+        Log.write("app: state created")
     }
 
     static var serverJar: URL {
@@ -106,13 +152,50 @@ final class AppState {
         }
     }
 
+    var isMicDenied: Bool {
+        settings.macMic && AVCaptureDevice.authorizationStatus(for: .audio) == .denied
+    }
+
     /// Shows the Mac camera overlay whenever a Mac camera is part of the recording.
     func syncWebcamPreview() {
         if settings.target.recordsWebcam {
-            webcamPreview.start()
+            webcamPreview.setBlur(settings.webcamBlur, amount: settings.webcamBlurAmount)
+            Task { [weak self] in
+                _ = await self?.webcamPreview.start()
+            }
         } else {
+            webcamPreview.setFrameSink(nil)
             webcamPreview.stop()
         }
+    }
+
+    func syncMicMonitor() {
+        if settings.macMic {
+            let status = AVCaptureDevice.authorizationStatus(for: .audio)
+            if status == .notDetermined {
+                AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+                    Task { @MainActor in
+                        if granted {
+                            self?.syncMicMonitor()
+                        }
+                    }
+                }
+                return
+            }
+            micMeter.start(id: settings.micId, gain: settings.micVolume)
+        } else {
+            micMeter.stop()
+            micLevel = 0
+        }
+    }
+
+    func syncAudioVolumes() {
+        recorder.setMicVolume(settings.micVolume)
+        webcamRecorder.setMicVolume(settings.micVolume)
+        recordingPhoneVolume = Float(settings.phoneVolume)
+        phonePlayer.setEnabled(settings.hearPhoneAudio && settings.audio != .none)
+        phonePlayer.setVolume(settings.phoneVolume)
+        syncMicMonitor()
     }
 
     func refresh() async {
@@ -125,6 +208,7 @@ final class AppState {
             }
             Log.write("microphones: \(mics.map(\.name).joined(separator: ", "))")
         }
+        syncMicMonitor()
         guard !isRunning, !isConnecting else { return }
         do {
             let found = try await adb.devices()
@@ -201,13 +285,17 @@ final class AppState {
         }
         session.onAudioConfig = { [weak self, weak session] asc in
             Task { @MainActor in
-                guard let self, let session, self.session === session, self.isRecording else { return }
+                guard let self, let session, self.session === session else { return }
+                self.phoneMeter.configure(asc: asc)
+                guard self.isRecording else { return }
                 self.recorder.configureAudio(asc: asc)
             }
         }
         session.onAudioFrame = { [weak self, weak session] frame, pts in
             Task { @MainActor in
-                guard let self, let session, self.session === session, self.isRecording else { return }
+                guard let self, let session, self.session === session else { return }
+                self.phoneMeter.process(frame)
+                guard self.isRecording else { return }
                 self.recorder.appendAudio(frame: frame, ptsMicros: pts)
             }
         }
@@ -255,7 +343,9 @@ final class AppState {
     /// nothing of ours keeps running in the background.
     func shutdown() {
         Log.write("app: shutdown")
+        webcamPreview.setFrameSink(nil)
         webcamPreview.stop()
+        phonePlayer.stop()
         if let session {
             adb.cleanupSync(
                 serial: session.deviceSerial,
@@ -338,10 +428,25 @@ final class AppState {
         let directory = settings.outputDirectory
         var startedURLs: [URL] = []
 
+        recordingHasPhoneAudio = settings.audio != .none
+        recordingUsesWebcamMic = settings.macMic && settings.target.recordsWebcam && settings.separateFiles
+        recordingHasMicInPhone = settings.macMic && !recordingUsesWebcamMic
+        recordingPhoneVolume = Float(settings.phoneVolume)
+
         if settings.macMic {
             guard await AVCaptureDevice.requestAccess(for: .audio) else {
                 throw RecorderError.writer("Microphone access is off. Enable it in System Settings › Privacy & Security › Microphone.")
             }
+        }
+
+        // The preview owns the only Mac camera session. Start it before the
+        // writer so the webcam file receives frames from the very beginning.
+        if settings.target.recordsWebcam {
+            let running = await webcamPreview.start()
+            guard running else {
+                throw WebcamError.configuration("The Mac camera could not be started. Check camera access in System Settings › Privacy & Security › Camera.")
+            }
+            webcamPreview.setBlur(settings.webcamBlur, amount: settings.webcamBlurAmount)
         }
 
         // The audio format has to be registered before the first video frame
@@ -355,8 +460,8 @@ final class AppState {
         if let asc = session?.audioConfig {
             recorder.configureAudio(asc: asc)
         }
-        if settings.macMic {
-            try recorder.startMicrophone(id: settings.micId)
+        if recordingHasMicInPhone {
+            try recorder.startMicrophone(id: settings.micId, volume: settings.micVolume)
         }
         lastRecording = phoneURL
         startedURLs.append(phoneURL)
@@ -366,13 +471,19 @@ final class AppState {
             do {
                 let url = try await webcamRecorder.start(
                     fps: max(30, settings.fps),
+                    microphone: recordingUsesWebcamMic ? settings.micId : nil,
+                    volume: settings.micVolume,
                     directory: directory
                 )
+                webcamPreview.setFrameSink { [weak webcamRecorder] sample in
+                    webcamRecorder?.appendVideo(sample)
+                }
                 lastWebcamRecording = url
                 startedURLs.append(url)
             } catch {
+                webcamPreview.setFrameSink(nil)
                 if !startedURLs.isEmpty {
-                    Task { _ = try? await recorder.finish() }
+                    _ = try? await recorder.finish()
                 }
                 throw error
             }
@@ -387,6 +498,7 @@ final class AppState {
         guard isRecording else { return }
         isRecording = false
         recordStart = nil
+        webcamPreview.setFrameSink(nil)
         var saved: [URL] = []
         var phoneURL: URL?
         var webcamURL: URL?
@@ -416,16 +528,26 @@ final class AppState {
             webcamRecorder.stopSession()
         }
 
-        if settings.macMic, let phoneURL {
+        let needsAudioPass = recordingHasMicInPhone
+            || (recordingHasPhoneAudio && recordingPhoneVolume != 1)
+        if needsAudioPass, let phoneURL {
             isComposing = true
-            status = "Mixing microphone…"
+            status = "Mixing audio…"
             let scratch = phoneURL.deletingLastPathComponent()
                 .appendingPathComponent(".bezel-mix-\(UUID().uuidString).mp4")
             do {
-                _ = try await AudioMixer.mix(phoneURL, output: scratch)
-                try? FileManager.default.removeItem(at: phoneURL)
-                try? FileManager.default.moveItem(at: scratch, to: phoneURL)
-                lastRecording = phoneURL
+                let mixed = try await AudioMixer.mix(
+                    phoneURL,
+                    output: scratch,
+                    phoneVolume: recordingPhoneVolume,
+                    hasPhoneAudio: recordingHasPhoneAudio,
+                    hasMicAudio: recordingHasMicInPhone
+                )
+                if mixed != phoneURL {
+                    try? FileManager.default.removeItem(at: phoneURL)
+                    try? FileManager.default.moveItem(at: scratch, to: phoneURL)
+                    lastRecording = phoneURL
+                }
                 Log.write("mix: final \(phoneURL.path)")
             } catch {
                 Log.write("mix: failed \(error.localizedDescription)")
@@ -440,7 +562,20 @@ final class AppState {
             let base = phoneURL.deletingPathExtension().lastPathComponent
             let output = phoneURL.deletingLastPathComponent().appendingPathComponent("\(base) PiP.mp4")
             do {
-                let composite = try await PiPExporter.compose(phone: phoneURL, webcam: webcamURL, output: output)
+                let options = PiPOptions(
+                    shape: settings.webcamShape,
+                    scale: settings.webcamScale,
+                    x: settings.webcamX,
+                    y: settings.webcamY,
+                    blur: settings.webcamBlur,
+                    blurAmount: settings.webcamBlurAmount
+                )
+                let composite = try await PiPExporter.compose(
+                    phone: phoneURL,
+                    webcam: webcamURL,
+                    output: output,
+                    options: options
+                )
                 if composite != phoneURL { try? FileManager.default.removeItem(at: phoneURL) }
                 try? FileManager.default.removeItem(at: webcamURL)
                 lastRecording = composite
@@ -465,12 +600,15 @@ final class AppState {
         if isRecording {
             Task { await stopRecording() }
         }
+        phonePlayer.stop()
         session?.stop()
         session = nil
         isRunning = false
         isConnecting = false
         renderer.flush()
         frameSize = .zero
+        phoneMeter.reset()
+        phoneLevel = 0
         status = "Stopped"
     }
 
@@ -479,11 +617,14 @@ final class AppState {
             Task { await stopRecording() }
         }
         guard isRunning else { return }
+        phonePlayer.stop()
         session?.stop()
         session = nil
         isRunning = false
         isConnecting = false
         renderer.flush()
+        phoneMeter.reset()
+        phoneLevel = 0
         status = "Stopped"
         if let message { errorMessage = message }
     }

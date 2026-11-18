@@ -33,6 +33,13 @@ struct ContentView: View {
             isFullScreen = false
         }
         .onChange(of: state.settings.target) { state.syncWebcamPreview() }
+        .onChange(of: state.settings.webcamBlur) { state.syncWebcamPreview() }
+        .onChange(of: state.settings.webcamBlurAmount) { state.syncWebcamPreview() }
+        .onChange(of: state.settings.macMic) { state.syncMicMonitor() }
+        .onChange(of: state.settings.micId) { state.syncMicMonitor() }
+        .onChange(of: state.settings.micVolume) { state.syncAudioVolumes() }
+        .onChange(of: state.settings.phoneVolume) { state.syncAudioVolumes() }
+        .onChange(of: state.settings.hearPhoneAudio) { state.syncAudioVolumes() }
         .onChange(of: state.settings.source) { state.restartSession() }
         .onChange(of: state.settings.cameraId) { state.restartSession() }
         .onChange(of: state.settings.resolution) { state.restartSession() }
@@ -134,18 +141,6 @@ struct ContentView: View {
                 .help("Screenshot (⌘S)")
             }
 
-            if state.isRunning {
-                Button {
-                    state.toggleRecording()
-                } label: {
-                    Label(state.isRecording ? "Stop" : "Record",
-                          systemImage: state.isRecording ? "stop.fill" : "record.circle")
-                }
-                .buttonStyle(.bordered)
-                .tint(state.isRecording ? .red : nil)
-                .help("Record (⌘R)")
-            }
-
             Button {
                 toggleFullScreen()
             } label: {
@@ -153,6 +148,28 @@ struct ContentView: View {
             }
             .buttonStyle(.borderless)
             .help("Full screen (⌃⌘F)")
+
+            if state.isRunning {
+                HStack(spacing: 6) {
+                    Button {
+                        state.toggleRecording()
+                    } label: {
+                        Label(state.isRecording ? "Stop" : "Record",
+                              systemImage: state.isRecording ? "stop.fill" : "record.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(state.isRecording ? .red : nil)
+                    .help("Record (⌘R)")
+
+                    if state.isRecording, let start = state.recordStart {
+                        TimelineView(.periodic(from: start, by: 1)) { context in
+                            Text(clock(from: start, to: context.date))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.red)
+                        }
+                    }
+                }
+            }
 
         }
         .padding(.horizontal, 16)
@@ -163,12 +180,28 @@ struct ContentView: View {
     /// writes.
     private var cameraPreview: some View {
         GeometryReader { geo in
-            WebcamPreviewView(session: state.webcamPreview.session)
-                .frame(width: geo.size.width * 0.28, height: geo.size.width * 0.28 * 9 / 16)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .padding(geo.size.width * 0.04)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            let rect = videoRect(in: geo.size)
+            CameraOverlay(available: rect.size)
+                .frame(width: rect.width, height: rect.height)
+                .offset(x: rect.minX, y: rect.minY)
         }
+    }
+
+    /// The phone picture is aspect-fit inside the preview, so the camera inset
+    /// has to use the picture's rectangle rather than the whole pane.
+    private func videoRect(in size: CGSize) -> CGRect {
+        guard state.frameSize.width > 0, state.frameSize.height > 0,
+              size.width > 0, size.height > 0 else {
+            return CGRect(origin: .zero, size: size)
+        }
+        let aspect = state.frameSize.width / state.frameSize.height
+        let container = size.width / size.height
+        if aspect > container {
+            let height = size.width / aspect
+            return CGRect(x: 0, y: (size.height - height) / 2, width: size.width, height: height)
+        }
+        let width = size.height * aspect
+        return CGRect(x: (size.width - width) / 2, y: 0, width: width, height: size.height)
     }
 
     private var preview: some View {
@@ -219,12 +252,18 @@ struct ContentView: View {
                         Text("\(Int(state.frameSize.width))×\(Int(state.frameSize.height))")
                     }
                     Text("\(state.renderer.framesPerSecond) fps")
+
+                    Divider()
+                        .frame(height: 11)
+                        .opacity(0.4)
+
+                    audioHUD
                 }
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.white.opacity(0.75))
+                .foregroundStyle(.white.opacity(0.85))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(.black.opacity(0.45), in: Capsule())
+                .background(.black.opacity(0.55), in: Capsule())
                 .padding(14)
             }
         }
@@ -316,7 +355,7 @@ struct ContentView: View {
 
                 if state.settings.target.recordsWebcam {
                     Toggle("Separate files", isOn: $state.settings.separateFiles)
-                        .help("Off: one video with the Mac camera in the corner.")
+                        .help("Off: one file with the phone, Mac camera, and microphone. On: a phone file and a Mac camera file with the microphone.")
                 }
 
                 Toggle("Record Mac microphone", isOn: $state.settings.macMic)
@@ -328,9 +367,136 @@ struct ContentView: View {
                             Text(mic.name).tag(String?.some(mic.id))
                         }
                     }
+
+                    if state.isMicDenied {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.yellow)
+                            Text("Microphone permission denied.")
+                                .font(.caption)
+                            Spacer()
+                            Button("Settings…") {
+                                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                        }
+                    }
                 }
             }
             .disabled(state.isRecording)
+
+            Section("Levels") {
+                if state.settings.audio != .none {
+                    VolumeControl(
+                        title: "Phone",
+                        icon: "speaker.wave.2.fill",
+                        level: state.phoneLevel,
+                        volume: $state.settings.phoneVolume
+                    )
+                    Toggle("Hear phone on Mac", isOn: $state.settings.hearPhoneAudio)
+                        .font(.caption)
+                        .help("Play phone audio live through your Mac speakers or headphones.")
+                }
+                if state.settings.macMic {
+                    VolumeControl(
+                        title: "Mac microphone",
+                        icon: "mic.fill",
+                        level: state.micLevel,
+                        volume: $state.settings.micVolume
+                    )
+                }
+                if state.settings.audio == .none && !state.settings.macMic {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "speaker.slash.fill")
+                                .foregroundStyle(.orange)
+                            Text("No audio is being recorded.")
+                                .font(.callout)
+                                .fontWeight(.medium)
+                        }
+                        Text("Your recording will have no sound. Turn on Phone audio or Mac microphone to capture audio.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            Button("Record Phone Audio") {
+                                state.settings.audio = .device
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(state.isRunning)
+
+                            Button("Record Mac Mic") {
+                                state.settings.macMic = true
+                                state.syncMicMonitor()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                        .padding(.top, 2)
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+
+            if state.settings.target.recordsWebcam {
+                Section("Camera overlay") {
+                    Picker("Shape", selection: $state.settings.webcamShape) {
+                        ForEach(Settings.WebcamShape.allCases) { shape in
+                            Text(shape.rawValue).tag(shape)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Size")
+                            Spacer()
+                            Text("\(Int((state.settings.webcamScale * 100).rounded()))%")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $state.settings.webcamScale, in: 0.15...0.50)
+                            .controlSize(.small)
+                    }
+
+                    Toggle("Background blur", isOn: $state.settings.webcamBlur)
+
+                    if state.settings.webcamBlur {
+                        HStack(spacing: 8) {
+                            Text("Blur amount")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Slider(value: $state.settings.webcamBlurAmount, in: 0.1...1.0)
+                                .controlSize(.small)
+                            Text("\(Int(state.settings.webcamBlurAmount * 100))%")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 32, alignment: .trailing)
+                        }
+                        .padding(.leading, 4)
+                    }
+
+                    HStack {
+                        Text(state.settings.separateFiles
+                             ? "Separate files records the Mac camera full-frame; shape, size and blur shape the combined file."
+                             : "Drag the camera in the preview to place it. The export uses the same spot.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Button("Reset position") {
+                            state.settings.webcamX = 0.82
+                            state.settings.webcamY = 0.75
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                    }
+                }
+                .disabled(state.isRecording)
+            }
 
             Section("Quality") {
                 Picker("Resolution", selection: $state.settings.resolution) {
@@ -405,5 +571,134 @@ struct ContentView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    @ViewBuilder
+    private var audioHUD: some View {
+        if state.settings.audio == .none && !state.settings.macMic {
+            HStack(spacing: 4) {
+                Image(systemName: "speaker.slash.fill")
+                    .foregroundStyle(.orange)
+                Text("No audio")
+                    .foregroundStyle(.orange)
+            }
+            .help("No audio is enabled. The recording will have no sound.")
+        } else {
+            HStack(spacing: 8) {
+                if state.settings.audio != .none {
+                    HStack(spacing: 4) {
+                        Image(systemName: state.settings.phoneVolume <= 0.001 ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(state.settings.phoneVolume <= 0.001 ? .red : .white.opacity(0.85))
+                        MiniLevelMeter(level: min(1, state.phoneLevel * Float(state.settings.phoneVolume)))
+                    }
+                    .help(state.settings.phoneVolume <= 0.001 ? "Phone audio: Muted" : "Phone audio level")
+                }
+                if state.settings.macMic {
+                    HStack(spacing: 4) {
+                        Image(systemName: state.settings.micVolume <= 0.001 ? "mic.slash.fill" : "mic.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(state.settings.micVolume <= 0.001 ? .red : .white.opacity(0.85))
+                        MiniLevelMeter(level: min(1, state.micLevel * Float(state.settings.micVolume)))
+                    }
+                    .help(state.settings.micVolume <= 0.001 ? "Mac microphone: Muted" : "Mac microphone level")
+                }
+            }
+        }
+    }
+}
+
+private struct MiniLevelMeter: View {
+    let level: Float
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Capsule()
+                .fill(.white.opacity(0.25))
+            Capsule()
+                .fill(LinearGradient(
+                    colors: [.green, .yellow, .red],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                ))
+                .frame(width: 28 * CGFloat(max(0, min(1, level))))
+                .animation(.linear(duration: 0.08), value: level)
+        }
+        .frame(width: 28, height: 4)
+    }
+}
+
+private struct LevelMeter: View {
+    let level: Float
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(.quaternary)
+                Capsule()
+                    .fill(LinearGradient(
+                        colors: [.green, .yellow, .red],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ))
+                    .frame(width: geo.size.width * CGFloat(max(0, min(1, level))))
+                    .animation(.linear(duration: 0.08), value: level)
+            }
+        }
+        .frame(height: 6)
+    }
+}
+
+private struct VolumeControl: View {
+    let title: String
+    let icon: String
+    let level: Float
+    @Binding var volume: Double
+
+    var body: some View {
+        VStack(spacing: 5) {
+            HStack {
+                Label(title, systemImage: icon)
+                Spacer()
+                if volume <= 0.001 {
+                    Text("MUTED")
+                        .font(.caption.bold())
+                        .foregroundStyle(.red)
+                } else {
+                    Text("\(Int((volume * 100).rounded()))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Button {
+                    if volume > 0.001 {
+                        volume = 0
+                    } else {
+                        volume = 1.0
+                    }
+                } label: {
+                    Image(systemName: volume <= 0.001 ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .font(.caption)
+                        .foregroundStyle(volume <= 0.001 ? .red : .secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(volume <= 0.001 ? "Unmute" : "Mute")
+            }
+            LevelMeter(level: min(1, level * Float(volume)))
+            HStack(spacing: 8) {
+                Slider(value: $volume, in: 0...2)
+                    .controlSize(.small)
+                if abs(volume - 1.0) > 0.01 && volume > 0.001 {
+                    Button("100%") {
+                        volume = 1.0
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .help("Reset to 100%")
+                }
+            }
+        }
+        .padding(.vertical, 3)
     }
 }

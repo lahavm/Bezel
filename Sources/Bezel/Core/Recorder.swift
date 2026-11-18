@@ -40,11 +40,18 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
     private var micOffset: CMTime = .invalid
     private var lastMicPTS: CMTime = .invalid
     private var micFrames = 0
+    private var micVolume: Float = 1
 
     private(set) var url: URL?
 
     var isRunning: Bool {
         queue.sync { writer != nil }
+    }
+
+    func setMicVolume(_ volume: Double) {
+        queue.async { [self] in
+            self.micVolume = Float(volume)
+        }
     }
 
     func start(fps: Int, directory: URL) throws -> URL {
@@ -67,9 +74,10 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
         self.micOffset = .invalid
         self.lastMicPTS = .invalid
         self.micFrames = 0
+        self.micVolume = 1
         self.started = false
         self.hasSample = false
-        self.nominalDuration = CMTime(value: 1, timescale: CMTimeScale(max(1, fps)))
+        self.nominalDuration = CMTime(value: 1, timescale: CMTimeScale(fps > 0 ? fps : 60))
         return fileURL
     }
 
@@ -100,8 +108,9 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
     }
 
     /// Adds a second audio track with the Mac microphone to the same file.
-    func startMicrophone(id: String?) throws {
+    func startMicrophone(id: String?, volume: Double) throws {
         guard let writer, writer.status == .unknown else { return }
+        micVolume = Float(volume)
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: 48_000,
@@ -119,8 +128,16 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
               let captureInput = try? AVCaptureDeviceInput(device: device) else {
             throw RecorderError.writer("No microphone was found.")
         }
-        Log.write("mic: using \(device.localizedName)")
+        Log.write("mic: using \(device.localizedName) at \(Int(volume * 100))%")
         let output = AVCaptureAudioDataOutput()
+        output.audioSettings = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 48_000,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsNonInterleaved: false
+        ]
         output.setSampleBufferDelegate(self, queue: micQueue)
         session.beginConfiguration()
         guard session.canAddInput(captureInput), session.canAddOutput(output) else {
@@ -146,6 +163,7 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
             }
             let pts = CMTimeAdd(hostPTS, micOffset)
             guard pts >= sessionStartPTS else { return }
+            guard let gained = AudioGain.adjusted(micVolume, sampleBuffer: sampleBuffer) else { return }
             var timing = CMSampleTimingInfo(
                 duration: CMSampleBufferGetDuration(sampleBuffer),
                 presentationTimeStamp: pts,
@@ -154,7 +172,7 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
             var copy: CMSampleBuffer?
             guard CMSampleBufferCreateCopyWithNewTiming(
                 allocator: kCFAllocatorDefault,
-                sampleBuffer: sampleBuffer,
+                sampleBuffer: gained,
                 sampleTimingEntryCount: 1,
                 sampleTimingArray: &timing,
                 sampleBufferOut: &copy

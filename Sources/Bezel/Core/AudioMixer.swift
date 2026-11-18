@@ -15,7 +15,13 @@ enum AudioMixError: LocalizedError {
 /// video stream untouched. Used when the Mac microphone is recorded too, so the
 /// result is a normal single-audio MP4 that every player understands.
 enum AudioMixer {
-    static func mix(_ source: URL, output: URL) async throws -> URL {
+    static func mix(
+        _ source: URL,
+        output: URL,
+        phoneVolume: Float = 1,
+        hasPhoneAudio: Bool = true,
+        hasMicAudio: Bool = false
+    ) async throws -> URL {
         let asset = AVURLAsset(url: source)
         let videoTracks = try await asset.loadTracks(withMediaType: .video)
         let audioTracks = try await asset.loadTracks(withMediaType: .audio)
@@ -41,11 +47,13 @@ enum AudioMixer {
         ]
         let audioOutput = AVAssetReaderAudioMixOutput(audioTracks: audioTracks, audioSettings: pcm)
         let mix = AVMutableAudioMix()
-        mix.inputParameters = audioTracks.map { track in
+        mix.inputParameters = audioTracks.enumerated().map { index, track in
             let parameters = AVMutableAudioMixInputParameters(track: track)
-            parameters.setVolume(1, at: .zero)
+            let isPhone = hasPhoneAudio && index == 0
+            parameters.setVolume(isPhone ? phoneVolume : 1, at: .zero)
             return parameters
         }
+        Log.write("mix: \(audioTracks.count) track(s), phone=\(hasPhoneAudio) mic=\(hasMicAudio) phoneVolume=\(phoneVolume)")
         audioOutput.audioMix = mix
         guard reader.canAdd(audioOutput) else { throw AudioMixError.setup("The audio could not be read.") }
         reader.add(audioOutput)

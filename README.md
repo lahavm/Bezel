@@ -14,11 +14,17 @@ implemented.
   reconnecting. Native refresh rate, or 30/60 fps; 720p, 1080p, 1440p, 4K or
   native resolution; H.264 or HEVC.
 - Record the phone with no re-encoding, with phone audio or the phone mic.
-- "Phone + Mac camera" turns the Mac camera into a corner overlay in the
-  phone video, shown live in the preview. The Mac camera is recorded at the
-  size it delivers (1080p on the built-in one). Turn on "Separate files" to
-  get two files instead.
-- The Mac microphone is mixed into the same MP4 as one normal audio track.
+- "Phone + Mac camera" turns the Mac camera into a movable overlay in the phone
+  video. Drag it in the preview, change its size, pick rounded, rectangle,
+  circle or heart, and optionally blur the background behind the person. The
+  live preview and the exported file use the same settings.
+- Turn on "Separate files" to get two files instead: the phone recording with
+  its chosen phone audio, and a full-frame Mac camera recording with the chosen
+  microphone. The shape, size and blur controls shape the combined file.
+- Live level meters for the phone audio and the Mac microphone, with gain
+  sliders (0–200%) so a silent or quiet take is visible before and during
+  recording. The Mac microphone is mixed into the same MP4 as one normal audio
+  track.
 - Screenshots at the mirrored resolution.
 - Recordings start at a keyframe (up to a second after pressing record), which
   keeps the files seekable.
@@ -87,6 +93,8 @@ Scripts/      fetch-vendor.sh, build-app.sh
 - No touch, keyboard or clipboard control (viewing and recording only).
 - The picture-in-picture overlay is written after recording stops, so a very
   long take takes a moment to finish.
+- Background blur uses person segmentation. It needs a visible person; when no
+  person is found the camera is shown unblurred.
 - 4K60 is limited by the phone's encoder and the fanless Mac; the frame-rate
   readout shows what actually arrives.
 - Some phones expose only their main and front cameras, so ultrawide or tele
