@@ -6,6 +6,7 @@ struct ContentView: View {
     @Environment(AppState.self) private var state
     @State private var isFullScreen = false
     @State private var showInspector = true
+    @State private var showInspectorLeft = false
     @State private var autoFoldedForRecording = false
 
     var body: some View {
@@ -535,6 +536,11 @@ struct ContentView: View {
                 .disabled(state.isRecording)
             }
 
+            Toggle(isOn: $showInspectorLeft) {
+    Text("Inspector on left")
+}
+                .help("Move the inspector to the left side of the screen")
+                .padding(.top, 4)
             Section("Quality") {
                 Picker("Resolution", selection: $state.settings.resolution) {
                     ForEach(Settings.Resolution.allCases) { resolution in

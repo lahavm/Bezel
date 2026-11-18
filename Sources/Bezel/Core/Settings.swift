@@ -60,6 +60,12 @@ struct Settings: Sendable, Equatable, Codable {
         }
     }
 
+    enum InspectorPosition: String, CaseIterable, Identifiable, Sendable, Codable {
+        case left = "Left"
+        case right = "Right"
+        var id: String { rawValue }
+    }
+
     enum Target: String, CaseIterable, Identifiable, Sendable, Codable {
         case phone = "Phone"
         case both = "Both"
@@ -95,6 +101,8 @@ struct Settings: Sendable, Equatable, Codable {
     var webcamY: Double = 0.75
     var webcamBlur = false
     var webcamBlurAmount: Double = 0.5
+    /// Side where the inspector appears (.left or .right). Default: .right.
+    var inspectorPosition: InspectorPosition = .right
     /// False until the welcome screen has been dismissed once.
     var hasSeenWelcome = false
 
@@ -114,7 +122,7 @@ struct Settings: Sendable, Equatable, Codable {
     private enum CodingKeys: String, CodingKey {
         case source, control, audio, target, macMic, micId, separateFiles, recordingsFolder
         case resolution, fps, codec, cameraFacing, cameraId
-        case phoneVolume, micVolume, hearPhoneAudio, webcamShape, webcamSize, webcamScale, webcamX, webcamY, webcamBlur, webcamBlurAmount
+        case phoneVolume, micVolume, hearPhoneAudio, webcamShape, webcamSize, webcamScale, webcamX, webcamY, webcamBlur, webcamBlurAmount, inspectorPosition
         case hasSeenWelcome
     }
 
@@ -145,6 +153,7 @@ struct Settings: Sendable, Equatable, Codable {
         webcamY = try container.decodeIfPresent(Double.self, forKey: .webcamY) ?? 0.75
         webcamBlur = try container.decodeIfPresent(Bool.self, forKey: .webcamBlur) ?? false
         webcamBlurAmount = try container.decodeIfPresent(Double.self, forKey: .webcamBlurAmount) ?? 0.5
+        inspectorPosition = try container.decodeIfPresent(InspectorPosition.self, forKey: .inspectorPosition) ?? .right
         hasSeenWelcome = try container.decodeIfPresent(Bool.self, forKey: .hasSeenWelcome) ?? false
     }
 
