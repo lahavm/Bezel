@@ -32,6 +32,9 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
     private var lastPTS: CMTime = .invalid
     private var started = false
     private var hasSample = false
+    private var seeded = false
+    private var pendingIsSeed = false
+    private var startedAtHost: UInt64 = 0
     private var nominalDuration = CMTime(value: 1, timescale: 60)
 
     private var micInput: AVAssetWriterInput?
@@ -77,6 +80,9 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
         self.micVolume = 1
         self.started = false
         self.hasSample = false
+        self.seeded = false
+        self.pendingIsSeed = false
+        self.startedAtHost = DispatchTime.now().uptimeNanoseconds
         self.nominalDuration = CMTime(value: 1, timescale: CMTimeScale(fps > 0 ? fps : 60))
         return fileURL
     }
@@ -187,6 +193,53 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
         }
     }
 
+    /// Starts the file with the phone's last keyframe when the screen is still.
+    /// scrcpy only sends frames on changes, so a still screen would otherwise
+    /// produce no video at all.
+    func seed(_ sample: CMSampleBuffer, at pts: CMTime, continuous: Bool) {
+        queue.async { [self] in
+            guard let writer, writer.status == .unknown, !started, input == nil else { return }
+            guard pts.isValid, let format = CMSampleBufferGetFormatDescription(sample) else { return }
+            let created = AVAssetWriterInput(mediaType: .video, outputSettings: nil, sourceFormatHint: format)
+            created.expectsMediaDataInRealTime = true
+            guard writer.canAdd(created) else {
+                Log.write("recorder: writer rejected the seed")
+                return
+            }
+            writer.add(created)
+            input = created
+            guard writer.startWriting() else {
+                Log.write("recorder: seed startWriting failed \(writer.error?.localizedDescription ?? "")")
+                writer.cancelWriting()
+                return
+            }
+            writer.startSession(atSourceTime: pts)
+            sessionStartPTS = pts
+            started = true
+            // A keyframe that was the newest frame can be followed by its own
+            // P-frames; an older one needs a fresh keyframe first.
+            seeded = !continuous
+            var timing = CMSampleTimingInfo(
+                duration: nominalDuration,
+                presentationTimeStamp: pts,
+                decodeTimeStamp: .invalid
+            )
+            var copy: CMSampleBuffer?
+            guard CMSampleBufferCreateCopyWithNewTiming(
+                allocator: kCFAllocatorDefault,
+                sampleBuffer: sample,
+                sampleTimingEntryCount: 1,
+                sampleTimingArray: &timing,
+                sampleBufferOut: &copy
+            ) == noErr, let copy else { return }
+            pending = copy
+            pendingPTS = pts
+            pendingIsSeed = true
+            lastPTS = pts
+            Log.write("recorder: seeded the last keyframe at \(CMTimeGetSeconds(pts))")
+        }
+    }
+
     func appendAudio(frame: Data, ptsMicros: Int64) {
         queue.async { [self] in
             guard let audioFormat, let audioInput, started, sessionStartPTS.isValid else { return }
@@ -211,9 +264,12 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
             guard pts.isValid else { return }
             // Recording can start mid-GOP; leading P-frames reference a picture
             // that is not in the file and make the whole track unreadable.
-            if !started, !isKeyframe {
+            if (!started || seeded), !isKeyframe {
                 skippedFrames += 1
                 return
+            }
+            if seeded {
+                seeded = false
             }
 
             if input == nil {
@@ -248,11 +304,19 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
                     return
                 }
                 let gap = CMTimeSubtract(pts, pendingPTS)
-                let duration = (gap.isValid && gap > .zero && gap < CMTime(value: 2, timescale: 1)) ? gap : nominalDuration
+                var duration = nominalDuration
+                if gap.isValid, gap > .zero {
+                    // A seeded still has to cover the whole time the screen was
+                    // static; ordinary gaps stay capped.
+                    if pendingIsSeed || gap < CMTime(value: 2, timescale: 1) {
+                        duration = gap
+                    }
+                }
                 appendCopied(previous, duration: duration)
             }
             pending = sample
             pendingPTS = pts
+            pendingIsSeed = false
             lastPTS = pts
         }
     }
@@ -264,12 +328,17 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
                     continuation.resume(throwing: RecorderError.noSamples)
                     return
                 }
+                var pendingDuration = nominalDuration
                 if let previous = pending, pendingPTS.isValid {
                     for _ in 0..<100 where input?.isReadyForMoreMediaData != true {
                         usleep(2000)
                     }
-                    appendCopied(previous, duration: nominalDuration)
+                    pendingDuration = max(nominalDuration, wallHold(since: pendingPTS))
+                    appendCopied(previous, duration: pendingDuration)
                 }
+                let pendingEnd = pendingPTS.isValid
+                    ? CMTimeAdd(pendingPTS, pendingDuration)
+                    : .zero
                 pending = nil
 
                 let input = self.input
@@ -297,6 +366,7 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
                 mic?.markAsFinished()
                 var end = lastAudioPTS.isValid ? CMTimeMaximum(lastPTS, lastAudioPTS) : lastPTS
                 if lastMicPTS.isValid { end = CMTimeMaximum(end, lastMicPTS) }
+                end = CMTimeMaximum(end, pendingEnd)
                 writer.endSession(atSourceTime: CMTimeAdd(end, nominalDuration))
                 writer.finishWriting {
                     if writer.status != .completed {
@@ -313,6 +383,14 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
 
     private var skippedFrames = 0
     private var droppedFrames = 0
+
+    /// How long the last frame was actually on screen, based on wall time.
+    private func wallHold(since pts: CMTime) -> CMTime {
+        guard sessionStartPTS.isValid else { return nominalDuration }
+        let elapsed = Double(DispatchTime.now().uptimeNanoseconds &- startedAtHost) / 1_000_000_000
+        let media = CMTimeGetSeconds(CMTimeSubtract(pts, sessionStartPTS))
+        return CMTime(seconds: max(0, elapsed - media), preferredTimescale: 600)
+    }
 
     private func appendCopied(_ sample: CMSampleBuffer, duration: CMTime) {
         guard let input, input.isReadyForMoreMediaData else { return }

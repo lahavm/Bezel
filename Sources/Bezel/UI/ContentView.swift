@@ -28,7 +28,6 @@ struct ContentView: View {
             }
             .animation(.snappy(duration: 0.24), value: showInspector)
         }
-        .background(shortcutButtons)
         .task { state.startMonitoring() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in
             isFullScreen = true
@@ -70,21 +69,6 @@ struct ContentView: View {
         } message: {
             Text(state.errorMessage ?? "")
         }
-    }
-
-    /// Invisible buttons so the shortcuts work even when their toolbar
-    /// counterparts are hidden in full screen.
-    private var shortcutButtons: some View {
-        VStack {
-            Button("Record") { state.toggleRecording() }
-                .keyboardShortcut("r", modifiers: .command)
-            Button("Screenshot") { state.takeScreenshot() }
-                .keyboardShortcut("s", modifiers: .command)
-            Button("Full screen") { toggleFullScreen() }
-                .keyboardShortcut("f", modifiers: [.command, .control])
-        }
-        .opacity(0)
-        .frame(width: 0, height: 0)
     }
 
     private func toggleFullScreen() {
@@ -142,7 +126,6 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(state.isRunning ? false : !state.canConnect)
-            .keyboardShortcut(.return, modifiers: .command)
 
             Spacer()
 

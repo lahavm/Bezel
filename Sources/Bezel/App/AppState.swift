@@ -421,8 +421,9 @@ final class AppState {
 
     func startRecording() async throws {
         guard !isRecording else { return }
-        if !isRunning {
-            throw RecorderError.writer("Connect the phone before recording it.")
+        guard isRunning, let session, session.isRunning else {
+            finish(message: nil)
+            throw RecorderError.writer("The phone is not connected. Connect it and try again.")
         }
 
         let directory = settings.outputDirectory
@@ -451,13 +452,13 @@ final class AppState {
 
         // The audio format has to be registered before the first video frame
         // starts the writer, so give the device a moment to send it.
-        if settings.audio != .none, session?.audioConfig == nil {
-            for _ in 0..<30 where session?.audioConfig == nil {
+        if settings.audio != .none, session.audioConfig == nil {
+            for _ in 0..<30 where session.audioConfig == nil {
                 try? await Task.sleep(for: .milliseconds(50))
             }
         }
         let phoneURL = try recorder.start(fps: settings.fps, directory: directory)
-        if let asc = session?.audioConfig {
+        if let asc = session.audioConfig {
             recorder.configureAudio(asc: asc)
         }
         if recordingHasMicInPhone {
@@ -487,6 +488,12 @@ final class AppState {
                 }
                 throw error
             }
+        }
+
+        // Attach the phone, mic and webcam writers first; starting the file
+        // before the last input is added is not allowed.
+        if let seed = session.recordingSeed() {
+            recorder.seed(seed.sample, at: seed.pts, continuous: seed.continuous)
         }
 
         recordStart = Date()

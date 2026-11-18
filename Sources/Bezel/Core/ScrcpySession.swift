@@ -41,6 +41,11 @@ final class ScrcpySession: @unchecked Sendable {
     private(set) var audioConfig: Data?
     private let lock = NSLock()
     private var running = false
+    private var lastKeyframe: CMSampleBuffer?
+    private var lastVideoWasKeyframe = false
+    private var lastVideoHost: UInt64 = 0
+    private var lastMediaPTS: Int64 = 0
+    private var lastMediaHost: UInt64 = 0
 
     init(device: Device, adb: ADB) {
         self.device = device
@@ -48,6 +53,7 @@ final class ScrcpySession: @unchecked Sendable {
     }
 
     var deviceSerial: String { device.serial }
+    var isRunning: Bool { isRunningValue() }
     var reverseTarget: String { "localabstract:\(socketName)" }
 
     private var socketName: String {
@@ -108,6 +114,22 @@ final class ScrcpySession: @unchecked Sendable {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.readLoop(fd)
         }
+    }
+
+    /// The last keyframe plus a timestamp for "now" on the phone clock, used
+    /// when recording starts on a still screen (the encoder sends nothing).
+    func recordingSeed() -> (sample: CMSampleBuffer, pts: CMTime, continuous: Bool)? {
+        lock.lock()
+        defer { lock.unlock() }
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard let lastKeyframe, lastMediaHost > 0, lastMediaPTS > 0 else { return nil }
+        // The cached keyframe is the last frame on a still screen, or the start
+        // of its GOP if nothing followed it yet. Otherwise the screen is busy
+        // and a fresh keyframe will arrive on its own.
+        let continuous = lastVideoWasKeyframe
+        guard continuous || now &- lastVideoHost > 150_000_000 else { return nil }
+        let micros = Int64((now &- lastMediaHost) / 1_000)
+        return (lastKeyframe, CMTime(value: lastMediaPTS + max(0, micros), timescale: 1_000_000), continuous)
     }
 
     func stop() {
@@ -228,6 +250,10 @@ final class ScrcpySession: @unchecked Sendable {
             } else if let format,
                       let sample = AudioFrames.sampleBuffer(frame: payload, format: format, ptsMicros: pts) {
                 frames += 1
+                lock.lock()
+                lastMediaPTS = pts
+                lastMediaHost = DispatchTime.now().uptimeNanoseconds
+                lock.unlock()
                 if frames == 1 || frames % 200 == 0 {
                     Log.write("audio: frames=\(frames) pts=\(pts)")
                 }
@@ -271,10 +297,18 @@ final class ScrcpySession: @unchecked Sendable {
                       let avcc = H264Frames.avcc(from: payload),
                       let sample = H264Frames.sampleBuffer(avcc: avcc, format: format, ptsMicros: pts) {
                 samples += 1
+                let keyframe = H264Frames.isKeyframe(avcc: avcc)
+                lock.lock()
+                lastVideoHost = DispatchTime.now().uptimeNanoseconds
+                lastVideoWasKeyframe = keyframe
+                lastMediaPTS = pts
+                lastMediaHost = lastVideoHost
+                if keyframe { lastKeyframe = sample }
+                lock.unlock()
                 if samples == 1 || samples % 120 == 0 {
                     Log.write("session: samples=\(samples) pts=\(pts)")
                 }
-                onSample?(sample, H264Frames.isKeyframe(avcc: avcc))
+                onSample?(sample, keyframe)
             }
         }
 
@@ -289,8 +323,6 @@ final class ScrcpySession: @unchecked Sendable {
         defer { lock.unlock() }
         return running
     }
-
-    private var isRunning: Bool { isRunningValue() }
 
     private func markRunning(_ value: Bool) {
         lock.lock()
