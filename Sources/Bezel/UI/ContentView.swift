@@ -311,6 +311,15 @@ struct ContentView: View {
                 }
 
                 Toggle("Record Mac microphone", isOn: $state.settings.macMic)
+
+                if state.settings.macMic {
+                    Picker("Microphone", selection: $state.settings.micId) {
+                        Text("Auto").tag(String?.none)
+                        ForEach(state.microphones) { mic in
+                            Text(mic.name).tag(String?.some(mic.id))
+                        }
+                    }
+                }
             }
             .disabled(state.isRecording)
 

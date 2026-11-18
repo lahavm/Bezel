@@ -30,6 +30,7 @@ final class AppState {
     var lastScreenshot: URL?
     var isComposing = false
     var cameras: [CameraInfo] = []
+    var microphones: [MicInfo] = []
 
     private var session: ScrcpySession?
     private var monitor: Task<Void, Never>?
@@ -107,6 +108,14 @@ final class AppState {
     }
 
     func refresh() async {
+        let mics = Microphone.devices()
+        if mics != microphones {
+            microphones = mics
+            if let id = settings.micId, !mics.contains(where: { $0.id == id }) {
+                settings.micId = nil
+            }
+            Log.write("microphones: \(mics.map(\.name).joined(separator: ", "))")
+        }
         guard !isRunning, !isConnecting else { return }
         do {
             let found = try await adb.devices()
@@ -341,7 +350,7 @@ final class AppState {
                 recorder.configureAudio(asc: asc)
             }
             if settings.macMic {
-                try recorder.startMicrophone()
+                try recorder.startMicrophone(id: settings.micId)
             }
             lastRecording = url
             startedURLs.append(url)
@@ -354,7 +363,8 @@ final class AppState {
                     resolution: settings.webcamResolution,
                     fps: max(30, settings.fps),
                     directory: directory,
-                    microphone: settings.macMic && !settings.target.recordsPhone
+                    microphone: settings.macMic && !settings.target.recordsPhone,
+                    micId: settings.micId
                 )
                 lastWebcamRecording = url
                 startedURLs.append(url)

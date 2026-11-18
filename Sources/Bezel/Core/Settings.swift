@@ -47,6 +47,8 @@ struct Settings: Sendable, Equatable, Codable {
     var target: Target = .phone
     var webcamResolution: Int = 1080
     var macMic = false
+    /// nil means Auto: the connected external mic, else the system default.
+    var micId: String?
     var separateFiles = false
     var recordingsFolder = ""
     var resolution: Resolution = .fhd

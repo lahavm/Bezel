@@ -100,7 +100,7 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
     }
 
     /// Adds a second audio track with the Mac microphone to the same file.
-    func startMicrophone() throws {
+    func startMicrophone(id: String?) throws {
         guard let writer, writer.status == .unknown else { return }
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatMPEG4AAC,
@@ -115,7 +115,7 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
         micInput = input
 
         let session = AVCaptureSession()
-        guard let device = Microphone.preferred(),
+        guard let device = Microphone.device(id: id),
               let captureInput = try? AVCaptureDeviceInput(device: device) else {
             throw RecorderError.writer("No microphone was found.")
         }

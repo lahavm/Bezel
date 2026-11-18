@@ -40,7 +40,7 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         writeQueue.sync { writer != nil }
     }
 
-    func start(resolution: Int, fps: Int, directory: URL, microphone: Bool = false) async throws -> URL {
+    func start(resolution: Int, fps: Int, directory: URL, microphone: Bool = false, micId: String? = nil) async throws -> URL {
         Log.write("webcam: requesting camera access")
         guard await AVCaptureDevice.requestAccess(for: .video) else {
             Log.write("webcam: access denied")
@@ -117,7 +117,7 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         session.addOutput(output)
 
         if microphone,
-           let device = Microphone.preferred(),
+           let device = Microphone.device(id: micId),
            let audioDeviceInput = try? AVCaptureDeviceInput(device: device) {
             audioOutput.setSampleBufferDelegate(self, queue: queue)
             if session.canAddInput(audioDeviceInput), session.canAddOutput(audioOutput) {
