@@ -5,6 +5,8 @@ import SwiftUI
 struct ContentView: View {
     @Environment(AppState.self) private var state
     @State private var isFullScreen = false
+    @State private var showInspector = true
+    @State private var autoFoldedForRecording = false
 
     var body: some View {
         @Bindable var state = state
@@ -16,13 +18,15 @@ struct ContentView: View {
             }
             HStack(spacing: 0) {
                 preview
-                if !isFullScreen {
+                if !isFullScreen, showInspector {
                     Divider()
                     inspector(state: state)
                         .frame(width: 286)
                         .background(.regularMaterial)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
+            .animation(.snappy(duration: 0.24), value: showInspector)
         }
         .background(shortcutButtons)
         .task { state.startMonitoring() }
@@ -45,6 +49,16 @@ struct ContentView: View {
         .onChange(of: state.settings.resolution) { state.restartSession() }
         .onChange(of: state.settings.fps) { state.restartSession() }
         .onChange(of: state.settings.codec) { state.restartSession() }
+        .onChange(of: state.isRecording) {
+            if state.isRecording {
+                guard showInspector else { return }
+                autoFoldedForRecording = true
+                showInspector = false
+            } else if autoFoldedForRecording {
+                autoFoldedForRecording = false
+                showInspector = true
+            }
+        }
         .alert(
             "Problem",
             isPresented: Binding(
@@ -77,10 +91,22 @@ struct ContentView: View {
         NSApp.keyWindow?.toggleFullScreen(nil)
     }
 
+    private func toggleInspector() {
+        autoFoldedForRecording = false
+        showInspector.toggle()
+    }
+
     private func topBar(state: AppState) -> some View {
         @Bindable var state = state
 
         return HStack(spacing: 12) {
+            HStack(spacing: 7) {
+                BrandMark(size: 20)
+                Text("Bezel")
+                    .font(.system(size: 14, weight: .semibold))
+            }
+            .accessibilityElement(children: .combine)
+
             Menu {
                 if state.devices.isEmpty {
                     Text("No devices")
@@ -163,13 +189,27 @@ struct ContentView: View {
 
                     if state.isRecording, let start = state.recordStart {
                         TimelineView(.periodic(from: start, by: 1)) { context in
-                            Text(clock(from: start, to: context.date))
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.red)
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(.red)
+                                    .frame(width: 6, height: 6)
+                                Text(clock(from: start, to: context.date))
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.red)
+                            }
                         }
                     }
                 }
             }
+
+            Button {
+                toggleInspector()
+            } label: {
+                Image(systemName: "sidebar.right")
+            }
+            .buttonStyle(.borderless)
+            .help(showInspector ? "Hide inspector (⌘\\)" : "Show inspector (⌘\\)")
+            .keyboardShortcut("\\", modifiers: .command)
 
         }
         .padding(.horizontal, 16)
@@ -215,9 +255,9 @@ struct ContentView: View {
 
             if !state.isRunning && !state.isComposing {
                 VStack(spacing: 10) {
-                    Image(systemName: "iphone.gen3")
-                        .font(.system(size: 34, weight: .light))
-                        .foregroundStyle(.white.opacity(0.55))
+                    BrandMark(size: 54)
+                        .opacity(0.55)
+                        .shadow(color: .black.opacity(0.45), radius: 14, y: 4)
                     Text(state.canConnect ? "Ready to mirror" : "Connect a device over USB")
                         .font(.callout)
                         .foregroundStyle(.white.opacity(0.55))
@@ -565,12 +605,37 @@ struct ContentView: View {
                     .help(url.path)
                 }
 
-                Text("⌘R record · ⌘S screenshot · ⌃⌘F full screen")
+                Text("⌘R record · ⌘S screenshot · ⌃⌘F full screen · ⌘\\ inspector")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Text("Inspector")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+                        .kerning(0.7)
+                    Spacer()
+                    Button {
+                        toggleInspector()
+                    } label: {
+                        Image(systemName: "sidebar.right")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Hide inspector (⌘\\)")
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.regularMaterial)
+                Divider()
+            }
+        }
     }
 
     @ViewBuilder

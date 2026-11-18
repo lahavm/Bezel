@@ -31,8 +31,12 @@ implemented.
 - Full-screen preview with the controls hidden.
 - Choose the recordings folder (defaults to `~/Movies/Bezel`).
 
+The inspector can be folded away with the sidebar button (or `⌘\`) to give the
+preview the full window. It folds automatically when a recording starts and
+comes back when the recording is saved.
+
 Shortcuts: `⌘R` start/stop recording, `⌘S` screenshot, `⌃⌘F` full screen,
-`⌘↩` connect/stop.
+`⌘\` inspector, `⌘↩` connect/stop.
 
 Camera notes:
 - The phone camera works regardless of the Mac's lid state.
