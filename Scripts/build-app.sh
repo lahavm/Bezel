@@ -11,6 +11,9 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp ".build/release/Bezel" "$APP/Contents/MacOS/Bezel"
 cp "Resources/Info.plist" "$APP/Contents/Info.plist"
+if [ -f "Resources/AppIcon.icns" ]; then
+    cp "Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+fi
 cp "Vendor/platform-tools/adb" "$APP/Contents/Resources/adb"
 cp "Vendor/scrcpy-server-v5.0.1" "$APP/Contents/Resources/scrcpy-server.jar"
 
