@@ -117,7 +117,7 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         session.addOutput(output)
 
         if microphone,
-           let device = AVCaptureDevice.default(for: .audio),
+           let device = Microphone.preferred(),
            let audioDeviceInput = try? AVCaptureDeviceInput(device: device) {
             audioOutput.setSampleBufferDelegate(self, queue: queue)
             if session.canAddInput(audioDeviceInput), session.canAddOutput(audioOutput) {

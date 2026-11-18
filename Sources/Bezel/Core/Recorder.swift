@@ -115,10 +115,11 @@ final class Recorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @u
         micInput = input
 
         let session = AVCaptureSession()
-        guard let device = AVCaptureDevice.default(for: .audio),
+        guard let device = Microphone.preferred(),
               let captureInput = try? AVCaptureDeviceInput(device: device) else {
             throw RecorderError.writer("No microphone was found.")
         }
+        Log.write("mic: using \(device.localizedName)")
         let output = AVCaptureAudioDataOutput()
         output.setSampleBufferDelegate(self, queue: micQueue)
         session.beginConfiguration()
