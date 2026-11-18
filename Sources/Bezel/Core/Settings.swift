@@ -69,6 +69,8 @@ struct Settings: Sendable, Equatable, Codable {
     }
 
     var source: Source = .screen
+    /// Mouse and keyboard input goes to the phone while mirroring the screen.
+    var control = false
     var audio: Audio = .device
     var target: Target = .phone
     var macMic = false
@@ -108,7 +110,7 @@ struct Settings: Sendable, Equatable, Codable {
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case source, audio, target, macMic, micId, separateFiles, recordingsFolder
+        case source, control, audio, target, macMic, micId, separateFiles, recordingsFolder
         case resolution, fps, codec, cameraFacing, cameraId
         case phoneVolume, micVolume, hearPhoneAudio, webcamShape, webcamSize, webcamScale, webcamX, webcamY, webcamBlur, webcamBlurAmount
     }
@@ -118,6 +120,7 @@ struct Settings: Sendable, Equatable, Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         source = try container.decodeIfPresent(Source.self, forKey: .source) ?? .screen
+        control = try container.decodeIfPresent(Bool.self, forKey: .control) ?? true
         audio = try container.decodeIfPresent(Audio.self, forKey: .audio) ?? .device
         target = try container.decodeIfPresent(Target.self, forKey: .target) ?? .phone
         macMic = try container.decodeIfPresent(Bool.self, forKey: .macMic) ?? false

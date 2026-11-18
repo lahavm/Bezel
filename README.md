@@ -4,9 +4,9 @@ Native macOS app that mirrors and records an Android phone or tablet over USB.
 Self-contained: the app bundles its own `adb` and the scrcpy server, so nothing
 has to be installed on the Mac (beyond macOS 26) or on the device.
 
-Status: mirroring, phone screen/camera recording, phone audio, Mac microphone
-and picture-in-picture with an (external) Mac camera work. Touch/keyboard control is not
-implemented.
+Status: mirroring, phone screen/camera recording, phone audio, Mac microphone,
+picture-in-picture with an (external) Mac camera, and direct mouse/keyboard control
+work. Control is opt-in; touch, scroll, click, and keyboard are supported.
 
 ## Features
 
@@ -37,6 +37,14 @@ comes back when the recording is saved.
 
 Shortcuts: `⌘R` start/stop recording, `⌘S` screenshot, `⌃⌘F` full screen,
 `⌘\` inspector, `⌘↩` connect/stop.
+
+#### Mouse & keyboard control
+
+With “Mouse & keyboard control” on in the inspector (off by default), clicks,
+drags and the scroll wheel on the mirror are sent to the phone as touch events,
+and Mac keyboard keys are typed as Android keycodes. Right-click (or Esc) acts
+as back. Control only works while mirroring the phone screen; it reconnects
+automatically when turned on or off.
 
 Camera notes:
 - The phone camera works regardless of the Mac's lid state.

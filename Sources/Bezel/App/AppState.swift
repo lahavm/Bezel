@@ -419,6 +419,47 @@ final class AppState {
         }
     }
 
+    // MARK: - Phone input
+
+    /// The preview can drive the phone only while a screen session is live.
+    var canControlPhone: Bool {
+        isRunning && settings.control && settings.source == .screen && frameSize.width > 0
+    }
+
+    func sendTouch(_ action: ControlMessages.Action, at point: CGPoint) {
+        guard canControlPhone, let session else { return }
+        session.send(ControlMessages.touch(
+            action,
+            x: Int32(point.x.rounded()),
+            y: Int32(point.y.rounded()),
+            width: UInt16(min(frameSize.width, 65_535)),
+            height: UInt16(min(frameSize.height, 65_535))
+        ))
+    }
+
+    func sendScroll(dx: Int16, dy: Int16, at point: CGPoint) {
+        guard canControlPhone, let session, dx != 0 || dy != 0 else { return }
+        session.send(ControlMessages.scroll(
+            x: Int32(point.x.rounded()),
+            y: Int32(point.y.rounded()),
+            width: UInt16(min(frameSize.width, 65_535)),
+            height: UInt16(min(frameSize.height, 65_535)),
+            dx: dx,
+            dy: dy
+        ))
+    }
+
+    func sendKey(_ stroke: KeyMap.Stroke) {
+        guard canControlPhone, let session else { return }
+        switch stroke {
+        case .back:
+            session.send(ControlMessages.back)
+        case .key(let code, let meta):
+            session.send(ControlMessages.key(code: code, down: true, meta: meta))
+            session.send(ControlMessages.key(code: code, down: false, meta: meta))
+        }
+    }
+
     func startRecording() async throws {
         guard !isRecording else { return }
         guard isRunning, let session, session.isRunning else {

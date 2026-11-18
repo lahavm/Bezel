@@ -230,7 +230,7 @@ struct ContentView: View {
     private var preview: some View {
         ZStack {
             Color.black
-            PreviewView(layer: state.renderer.layer)
+            PreviewView(layer: state.renderer.layer, state: state)
 
             if state.settings.target.recordsWebcam {
                 cameraPreview
@@ -365,6 +365,11 @@ struct ContentView: View {
                         }
                     }
                 }
+
+                Toggle("Mouse & keyboard control", isOn: $state.settings.control)
+                    .disabled(state.isRecording || state.settings.source == .camera)
+                    .onChange(of: state.settings.control) { state.restartSession() }
+                    .help("Click, drag and scroll on the mirror, type on the Mac keyboard, right-click or Esc to go back. Turning it off or on reconnects.")
             }
 
             Section("Record") {

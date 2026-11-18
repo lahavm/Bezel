@@ -38,6 +38,9 @@ final class ScrcpySession: @unchecked Sendable {
     private var listenFD: Int32 = -1
     private var connectionFD: Int32 = -1
     private var audioFD: Int32 = -1
+    private var controlFD: Int32 = -1
+    private var controlsInput = false
+    private let controlLock = NSLock()
     private(set) var audioConfig: Data?
     private let lock = NSLock()
     private var running = false
@@ -75,6 +78,7 @@ final class ScrcpySession: @unchecked Sendable {
             throw SessionError.server("scrcpy-server.jar missing from the app bundle.")
         }
 
+        controlsInput = settings.control && settings.source == .screen
         Log.write("session: push \(jarURL.lastPathComponent) to \(Self.remoteJar)")
         try await adb.push(device.serial, local: jarURL, remote: Self.remoteJar)
 
@@ -109,6 +113,8 @@ final class ScrcpySession: @unchecked Sendable {
 
         if settings.audio != .none {
             startAudio(listener.fd)
+        } else if controlsInput {
+            startControl(listener.fd)
         }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -132,6 +138,39 @@ final class ScrcpySession: @unchecked Sendable {
         return (lastKeyframe, CMTime(value: lastMediaPTS + max(0, micros), timescale: 1_000_000), continuous)
     }
 
+    // MARK: - Input
+
+    /// Sends one control message; harmless when control is off or disconnected.
+    func send(_ message: Data) {
+        controlLock.lock()
+        defer { controlLock.unlock() }
+        guard controlFD >= 0 else { return }
+        message.withUnsafeBytes { buffer in
+            guard let base = buffer.baseAddress else { return }
+            var offset = 0
+            while offset < message.count {
+                let written = write(controlFD, base + offset, message.count - offset)
+                if written <= 0 { return }
+                offset += written
+            }
+        }
+    }
+
+    private func startControl(_ listener: Int32) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            do {
+                let fd = try self.acceptSync(listener, timeout: 10)
+                var on: Int32 = 1
+                setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+                self.controlFD = fd
+                Log.write("control: connected")
+            } catch {
+                Log.write("control: \(error.localizedDescription)")
+            }
+        }
+    }
+
     func stop() {
         markRunning(false)
         if connectionFD >= 0 {
@@ -142,6 +181,12 @@ final class ScrcpySession: @unchecked Sendable {
             close(audioFD)
             audioFD = -1
         }
+        controlLock.lock()
+        if controlFD >= 0 {
+            close(controlFD)
+            controlFD = -1
+        }
+        controlLock.unlock()
         if listenFD >= 0 {
             close(listenFD)
             listenFD = -1
@@ -165,7 +210,7 @@ final class ScrcpySession: @unchecked Sendable {
             "log_level=error",
             "video=true",
             "audio=\(settings.audio != .none)",
-            "control=false",
+            "control=\(controlsInput)",
             "tunnel_forward=false",
             "send_device_meta=false",
             "cleanup=true",
@@ -210,6 +255,7 @@ final class ScrcpySession: @unchecked Sendable {
             do {
                 let fd = try self.acceptSync(listener, timeout: 10)
                 self.audioFD = fd
+                if self.controlsInput { self.startControl(listener) }
                 let codec = try self.readExactly(fd, 4)
                 let name = String(decoding: codec, as: UTF8.self)
                 guard name.hasSuffix("aac") else {
@@ -221,6 +267,7 @@ final class ScrcpySession: @unchecked Sendable {
                 self.readAudioLoop(fd)
             } catch {
                 Log.write("audio: \(error.localizedDescription)")
+                if self.controlsInput, self.controlFD < 0 { self.startControl(listener) }
             }
         }
     }

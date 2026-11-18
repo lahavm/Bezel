@@ -3,15 +3,113 @@ import SwiftUI
 
 struct PreviewView: NSViewRepresentable {
     let layer: AVSampleBufferDisplayLayer
+    let state: AppState
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
+    func makeNSView(context: Context) -> PreviewLayerView {
+        let view = PreviewLayerView()
+        view.state = state
         view.wantsLayer = true
         view.layer = layer
         return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    func updateNSView(_ nsView: PreviewLayerView, context: Context) {
+        nsView.state = state
+    }
+}
+
+/// Shows the phone picture and turns clicks, drags, the scroll wheel and keys
+/// into phone input. The picture is aspect-fit, so points are mapped from the
+/// view into video pixels before they are sent.
+final class PreviewLayerView: NSView {
+    weak var state: AppState?
+
+    private var touching = false
+    private var scrollX: CGFloat = 0
+    private var scrollY: CGFloat = 0
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        guard let point = phonePoint(event, clamp: false) else { return }
+        touching = true
+        state?.sendTouch(.down, at: point)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard touching, let point = phonePoint(event, clamp: true) else { return }
+        state?.sendTouch(.move, at: point)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard touching, let point = phonePoint(event, clamp: true) else { return }
+        touching = false
+        state?.sendTouch(.up, at: point)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        state?.sendKey(.back)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard let state, let stroke = KeyMap.stroke(for: event) else {
+            super.keyDown(with: event)
+            return
+        }
+        state.sendKey(stroke)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        guard let point = phonePoint(event, clamp: true) else { return }
+        // Trackpads report fine-grained points; wheels report whole lines.
+        let scale: CGFloat = event.hasPreciseScrollingDeltas ? 0.05 : 1
+        scrollX += event.scrollingDeltaX * scale
+        scrollY += event.scrollingDeltaY * scale
+        let dx = scrollX.rounded(.towardZero)
+        let dy = scrollY.rounded(.towardZero)
+        guard dx != 0 || dy != 0 else { return }
+        scrollX -= dx
+        scrollY -= dy
+        state?.sendScroll(
+            dx: Int16(clamping: Int(-dx)),
+            dy: Int16(clamping: Int(-dy)),
+            at: point
+        )
+    }
+
+    /// View point → video pixel, or nil when the click is in the black bars.
+    private func phonePoint(_ event: NSEvent, clamp: Bool) -> CGPoint? {
+        guard let state, state.canControlPhone else { return nil }
+        let video = state.frameSize
+        let area = bounds.size
+        guard area.width > 0, area.height > 0 else { return nil }
+
+        let aspect = video.width / video.height
+        let container = area.width / area.height
+        let picture: CGRect
+        if aspect > container {
+            let height = area.width / aspect
+            picture = CGRect(x: 0, y: (area.height - height) / 2, width: area.width, height: height)
+        } else {
+            let width = area.height * aspect
+            picture = CGRect(x: (area.width - width) / 2, y: 0, width: width, height: area.height)
+        }
+
+        var point = convert(event.locationInWindow, from: nil)
+        guard picture.width > 0 else { return nil }
+        if clamp {
+            point.x = min(max(point.x, picture.minX), picture.maxX)
+            point.y = min(max(point.y, picture.minY), picture.maxY)
+        } else if !picture.contains(point) {
+            return nil
+        }
+        let u = (point.x - picture.minX) / picture.width
+        let v = 1 - (point.y - picture.minY) / picture.height // AppKit is y-up.
+        return CGPoint(x: u * video.width, y: v * video.height)
+    }
 }
 
 
