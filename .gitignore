@@ -1,0 +1,7 @@
+.build/
+build/
+Vendor/platform-tools/
+Vendor/*.zip
+Vendor/scrcpy-server-v5.0.1
+Vendor/licenses/
+.DS_Store
