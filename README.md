@@ -278,4 +278,4 @@ If you find Bezel useful, consider starring the repo on GitHub:
 
 ---
 
-*Generated on: November 2026. macOS 26, Xcode 26.*
+<img width="2552" height="1413" alt="image" src="https://github.com/user-attachments/assets/49fef1fe-b848-419a-ba46-ff2f78796f76" />
