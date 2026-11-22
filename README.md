@@ -13,6 +13,10 @@ control is **opt-in** (off by default); click/drag/scroll/type on the mirror to
 send events to the phone. Touch, scroll, click, and keyboard are supported when
 control is enabled.
 
+## Screenshots
+
+<img width="2552" height="1413" alt="Bezel mirroring an Android phone, with the inspector open on the right" src="https://github.com/user-attachments/assets/49fef1fe-b848-419a-ba46-ff2f78796f76" />
+
 ## Features
 
 - **Mirror the phone screen or its camera** over USB, switching between them
@@ -277,4 +281,3 @@ If you find Bezel useful, consider starring the repo on GitHub:
 
 ---
 
-<img width="2552" height="1413" alt="image" src="https://github.com/user-attachments/assets/49fef1fe-b848-419a-ba46-ff2f78796f76" />
