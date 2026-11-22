@@ -34,9 +34,20 @@ final class AppState {
     var lastScreenshot: URL?
     var isComposing = false
     var showWelcome = false
+    /// Transient message shown over the mirror and the files window.
+    var toast: String?
+
+    func showToast(_ message: String) {
+        toast = message
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, self.toast == message else { return }
+            self.toast = nil
+        }
+    }
 
     var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.2"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
     }
     var phoneLevel: Float = 0
     var micLevel: Float = 0
@@ -223,6 +234,7 @@ final class AppState {
         do {
             let found = try await adb.devices()
             devices = found
+            NotificationCenter.default.post(name: .bezelDevicesChanged, object: self)
             let summary = found.map { "\($0.serial):\($0.state):\($0.model):\($0.android)" }.joined(separator: ",")
             if summary != lastDeviceLog {
                 lastDeviceLog = summary

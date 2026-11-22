@@ -132,6 +132,24 @@ final class ADB: @unchecked Sendable {
         }
     }
 
+    /// A raw streaming process, for binary transfers and cancellable searches.
+    func stream(_ arguments: [String], capturesOutput: Bool = false) -> ADBStream {
+        ADBStream(
+            adbURL: adbURL,
+            environment: environment(),
+            arguments: arguments,
+            capturesOutput: capturesOutput
+        )
+    }
+
+    /// Runs a short command and returns stdout/stderr separately.
+    func captured(_ arguments: [String]) async throws -> ADBProcessResult {
+        let child = stream(arguments, capturesOutput: true)
+        try child.start()
+        Task { for try await _ in child.output() {} }
+        return await child.wait()
+    }
+
     /// True when a daemon owned by anything else (Android Studio, Homebrew)
     /// already answers on the default adb port.
     private func serverIsRunning() -> Bool {

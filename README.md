@@ -11,7 +11,8 @@ Mirroring, phone screen/camera recording, phone audio, Mac microphone and
 picture-in-picture with an (external) Mac camera work. Direct mouse/keyboard
 control is **opt-in** (off by default); click/drag/scroll/type on the mirror to
 send events to the phone. Touch, scroll, click, and keyboard are supported when
-control is enabled.
+control is enabled. Version 0.1 adds a Finder-like file browser for moving files
+between the Mac and the phone over the same USB connection.
 
 ## Screenshots
 
@@ -47,6 +48,15 @@ control is enabled.
   the phone as touch events, and Mac keyboard keys are typed as Android keycodes.
   Right-click (or Esc) acts as back. Control only works while mirroring the phone
   screen; turning it on or off reconnects the session.
+- **Files browser** (⌘B) — a native Finder-like window that shows your Mac and
+  every connected Android device in one sidebar. Browse phone storage, open and
+  preview files, search, rename, and drag files either direction with exact
+  progress, speed and ETA. Folders merge, conflicts ask, and uploads land via a
+  temporary file. Moves inside one phone stay on the device. Drop files on the
+  mirror window to send them to the
+  phone's Download folder, or select files in Finder and use **Send to Android**.
+  Files can open as a tab (⌘B) or in its own window (⇧⌘B), with optional split
+  panes (⇧⌘2) and an info pane (⇧⌘P).
 - **About panel** (⌘⇧? or Help ▶ About Bezel) shows the version and a link to
   the source code on GitHub.
 
@@ -58,6 +68,13 @@ control is enabled.
 | `⌘S` | Screenshot |
 | `⌃⌘F` | Full screen |
 | `⌘\` | Show/hide inspector |
+| `⌘B` | Open Files as a tab |
+| `⇧⌘B` | Open Files in a new window |
+| `⇧⌘2` | Split the Files pane |
+| `⇧⌘P` | Show/hide the Files info pane |
+| `⇧⌘N` | New folder (Files) |
+| `⌘F` | Search in the current folder |
+| `⌘↑` | Go up a folder (Files) |
 | `⌘↩` | Connect/stop |
 
 ## Build
@@ -160,7 +177,9 @@ If none is running, it starts the bundled adb with its own key store under
 Sources/Bezel/
   App/        AppState, entry point
   Core/       ADB wrapper, scrcpy session, parsers, preview, recorders, PiP/mix
-  UI/         SwiftUI window and preview view
+  Files/      file backends (Mac + Android), transfer queue, thumbnail cache
+  UI/         SwiftUI mirror window and AppKit Files browser
+Tests/        logic tests and an optional live-device round-trip test
 Resources/    Info.plist, app icon
 Vendor/       adb + scrcpy-server (downloaded, not committed)
 Scripts/      fetch-vendor.sh, build-app.sh
@@ -180,6 +199,14 @@ Scripts/      fetch-vendor.sh, build-app.sh
   readout shows what actually arrives.
 - Some phones expose only their main and front cameras, so ultrawide or tele
   lenses appear only when Android lists them.
+- The file browser needs the phone unlocked with USB debugging authorized. A
+  locked phone can still be mirrored, but `adb shell` file access may be refused.
+- Quick Look downloads a remote file first; a very large video can take a moment.
+- Filenames containing a newline are not supported by the phone's listing
+  parser. Spaces, quotes, unicode and `|` are handled.
+- "Send to Android" from Finder must be registered once: launch Bezel, then
+  log out and back in (or run `NSUpdateDynamicServices`) if the Service is
+  missing from Finder's menu.
 
 ## Third-party software
 
@@ -254,7 +281,24 @@ License texts are copied into the app bundle by `Scripts/build-app.sh`.
   or use the **Show Recordings in Finder** button in the Help menu.
 - Recordings are ordinary MP4/PNG files — playable in QuickTime, VLC, etc.
 
-### 8. Quit Bezel
+### 8. Browse and move files
+
+- Press ⌘B to open **Files** as a tab, or ⇧⌘B for a separate window. The
+  sidebar lists your Mac folders and every connected device.
+- Click a device to browse its internal storage or SD card. The toolbar has
+  back/forward, icon/list views, sorting, new folder, search and a transfers
+  popover; ⌘R refreshes.
+- Drag a file from the phone into a Finder window (or any app that accepts file
+  drops) to download it. Drag from Finder onto a folder in Bezel to upload.
+  Select several files to transfer them together. Space opens Quick Look.
+- Drag files onto the **mirror** window to send them straight to the phone's
+  Download folder. In Finder, select files and choose **Send to Android** from
+  the Services menu (or the right-click menu).
+- Copy/move within one device uses the device's own `cp`/`mv`, so it is instant.
+  Conflicts offer Replace, Keep Both or Skip; "Apply to all" remembers the
+  choice for the rest of that transfer.
+
+### 9. Quit Bezel
 
 - Press ⌘Q or choose Bezel ▶ Quit Bezel.
 - The app cleans up: removes the server jar, stops the reverse tunnel, and kills

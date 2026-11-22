@@ -66,6 +66,12 @@ struct Settings: Sendable, Equatable, Codable {
         var id: String { rawValue }
     }
 
+    enum FilesViewMode: String, CaseIterable, Identifiable, Sendable, Codable {
+        case list = "List"
+        case icons = "Icons"
+        var id: String { rawValue }
+    }
+
     enum Target: String, CaseIterable, Identifiable, Sendable, Codable {
         case phone = "Phone"
         case both = "Both"
@@ -106,6 +112,16 @@ struct Settings: Sendable, Equatable, Codable {
     /// False until the welcome screen has been dismissed once.
     var hasSeenWelcome = false
 
+    // File browser
+    var filesViewMode: FilesViewMode = .list
+    var filesSortKey: FileSortKey = .name
+    var filesSortAscending = true
+    var filesShowPreview = true
+    var filesSplit = false
+    var filesShowHidden = false
+    /// Last visited directory per backend ("local" or a device serial).
+    var filesLastPaths: [String: String] = [:]
+
     static var defaultFolder: URL {
         FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Bezel", isDirectory: true)
@@ -124,6 +140,7 @@ struct Settings: Sendable, Equatable, Codable {
         case resolution, fps, codec, cameraFacing, cameraId
         case phoneVolume, micVolume, hearPhoneAudio, webcamShape, webcamSize, webcamScale, webcamX, webcamY, webcamBlur, webcamBlurAmount, inspectorPosition
         case hasSeenWelcome
+        case filesViewMode, filesSortKey, filesSortAscending, filesShowPreview, filesSplit, filesShowHidden, filesLastPaths
     }
 
     /// Decodes missing keys with their defaults, so adding a setting never
@@ -155,6 +172,13 @@ struct Settings: Sendable, Equatable, Codable {
         webcamBlurAmount = try container.decodeIfPresent(Double.self, forKey: .webcamBlurAmount) ?? 0.5
         inspectorPosition = try container.decodeIfPresent(InspectorPosition.self, forKey: .inspectorPosition) ?? .right
         hasSeenWelcome = try container.decodeIfPresent(Bool.self, forKey: .hasSeenWelcome) ?? false
+        filesViewMode = try container.decodeIfPresent(FilesViewMode.self, forKey: .filesViewMode) ?? .list
+        filesSortKey = try container.decodeIfPresent(FileSortKey.self, forKey: .filesSortKey) ?? .name
+        filesSortAscending = try container.decodeIfPresent(Bool.self, forKey: .filesSortAscending) ?? true
+        filesShowPreview = try container.decodeIfPresent(Bool.self, forKey: .filesShowPreview) ?? true
+        filesSplit = try container.decodeIfPresent(Bool.self, forKey: .filesSplit) ?? false
+        filesShowHidden = try container.decodeIfPresent(Bool.self, forKey: .filesShowHidden) ?? false
+        filesLastPaths = try container.decodeIfPresent([String: String].self, forKey: .filesLastPaths) ?? [:]
     }
 
     static func load() -> Settings {

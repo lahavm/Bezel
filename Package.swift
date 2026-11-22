@@ -9,6 +9,11 @@ let package = Package(
             name: "Bezel",
             path: "Sources/Bezel",
             swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .testTarget(
+            name: "BezelTests",
+            dependencies: ["Bezel"],
+            path: "Tests/BezelTests"
         )
     ]
 )

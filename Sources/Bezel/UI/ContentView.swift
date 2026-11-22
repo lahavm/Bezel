@@ -11,6 +11,64 @@ struct ContentView: View {
     var body: some View {
         @Bindable var state = state
 
+        contentWithBinding
+        .alert(
+            "Problem",
+            isPresented: Binding(
+                get: { state.errorMessage != nil },
+                set: { if !$0 { state.errorMessage = nil } }
+            )
+        ) {
+            Button("OK") { state.errorMessage = nil }
+        } message: {
+            Text(state.errorMessage ?? "")
+        }
+        .sheet(isPresented: $state.showWelcome) {
+            WelcomeView()
+        }
+        .overlay(alignment: .bottom) { ToastView(message: state.toast) }
+        .animation(.snappy(duration: 0.2), value: state.toast)
+    }
+
+    private var contentWithLifecycle: some View {
+        mainContent
+            .task { state.startMonitoring() }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in
+                isFullScreen = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
+                isFullScreen = false
+            }
+    }
+
+    private var contentWithBinding: some View {
+        contentWithLifecycle
+            .onChange(of: state.settings.target) { state.syncWebcamPreview() }
+            .onChange(of: state.settings.webcamBlur) { state.syncWebcamPreview() }
+            .onChange(of: state.settings.webcamBlurAmount) { state.syncWebcamPreview() }
+            .onChange(of: state.settings.macMic) { state.syncMicMonitor() }
+            .onChange(of: state.settings.micId) { state.syncMicMonitor() }
+            .onChange(of: state.settings.micVolume) { state.syncAudioVolumes() }
+            .onChange(of: state.settings.phoneVolume) { state.syncAudioVolumes() }
+            .onChange(of: state.settings.hearPhoneAudio) { state.syncAudioVolumes() }
+            .onChange(of: state.settings.source) { state.restartSession() }
+            .onChange(of: state.settings.cameraId) { state.restartSession() }
+            .onChange(of: state.settings.resolution) { state.restartSession() }
+            .onChange(of: state.settings.fps) { state.restartSession() }
+            .onChange(of: state.settings.codec) { state.restartSession() }
+            .onChange(of: state.isRecording) {
+                if state.isRecording {
+                    guard showInspector else { return }
+                    autoFoldedForRecording = true
+                    showInspector = false
+                } else if autoFoldedForRecording {
+                    autoFoldedForRecording = false
+                    showInspector = true
+                }
+            }
+    }
+
+    private var mainContent: some View {
         VStack(spacing: 0) {
             if !isFullScreen {
                 topBar(state: state)
@@ -34,50 +92,6 @@ struct ContentView: View {
                 }
             }
             .animation(.snappy(duration: 0.24), value: showInspector)
-        }
-        .task { state.startMonitoring() }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in
-            isFullScreen = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
-            isFullScreen = false
-        }
-        .onChange(of: state.settings.target) { state.syncWebcamPreview() }
-        .onChange(of: state.settings.webcamBlur) { state.syncWebcamPreview() }
-        .onChange(of: state.settings.webcamBlurAmount) { state.syncWebcamPreview() }
-        .onChange(of: state.settings.macMic) { state.syncMicMonitor() }
-        .onChange(of: state.settings.micId) { state.syncMicMonitor() }
-        .onChange(of: state.settings.micVolume) { state.syncAudioVolumes() }
-        .onChange(of: state.settings.phoneVolume) { state.syncAudioVolumes() }
-        .onChange(of: state.settings.hearPhoneAudio) { state.syncAudioVolumes() }
-        .onChange(of: state.settings.source) { state.restartSession() }
-        .onChange(of: state.settings.cameraId) { state.restartSession() }
-        .onChange(of: state.settings.resolution) { state.restartSession() }
-        .onChange(of: state.settings.fps) { state.restartSession() }
-        .onChange(of: state.settings.codec) { state.restartSession() }
-        .onChange(of: state.isRecording) {
-            if state.isRecording {
-                guard showInspector else { return }
-                autoFoldedForRecording = true
-                showInspector = false
-            } else if autoFoldedForRecording {
-                autoFoldedForRecording = false
-                showInspector = true
-            }
-        }
-        .alert(
-            "Problem",
-            isPresented: Binding(
-                get: { state.errorMessage != nil },
-                set: { if !$0 { state.errorMessage = nil } }
-            )
-        ) {
-            Button("OK") { state.errorMessage = nil }
-        } message: {
-            Text(state.errorMessage ?? "")
-        }
-        .sheet(isPresented: $state.showWelcome) {
-            WelcomeView()
         }
     }
 
@@ -325,6 +339,7 @@ struct ContentView: View {
                 .allowsHitTesting(false)
             }
         }
+        .modifier(MirrorDropModifier())
     }
 
     private var recordingURLs: [URL] {
@@ -790,5 +805,32 @@ private struct VolumeControl: View {
             }
         }
         .padding(.vertical, 3)
+    }
+}
+
+private struct ToastView: View {
+    let message: String?
+
+    var body: some View {
+        if let message {
+            Text(message)
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+                .background(.black.opacity(0.75), in: Capsule())
+                .padding(.bottom, 24)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+}
+
+private struct MirrorDropModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content.dropDestination(for: URL.self) { urls, _ in
+            guard FilesCoordinator.shared.preferredDevice() != nil else { return false }
+            FilesCoordinator.shared.sendToAndroid(urls)
+            return true
+        }
     }
 }
