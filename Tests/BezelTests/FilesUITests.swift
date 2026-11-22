@@ -33,18 +33,39 @@ import Testing
 
 @Test @MainActor func filesWindowLoadsLocalDirectory() async throws {
     let local = LocalBackend()
-    let controller = FilesWindowController(
+    let controller = FilesTabController(
         backend: local,
         path: NSHomeDirectory(),
         coordinator: FilesCoordinator.shared
     )
-    controller.showWindow(nil)
-    defer { controller.window?.close() }
+    _ = controller.view
 
     for _ in 0..<40 {
         if !controller.browser.primaryPane.items.isEmpty { break }
         try await Task.sleep(for: .milliseconds(100))
     }
     #expect(!controller.browser.primaryPane.items.isEmpty)
-    #expect(controller.window?.contentViewController === controller.browser)
+    #expect(controller.browser.view.superview != nil)
+}
+
+/// Regression: the sidebar outline once had no table column and no text
+/// fields, so the whole left column rendered blank.
+@Test @MainActor func filesSidebarRendersRows() async throws {
+    let local = LocalBackend()
+    let controller = FilesTabController(
+        backend: local,
+        path: NSHomeDirectory(),
+        coordinator: FilesCoordinator.shared
+    )
+    _ = controller.view
+    try await Task.sleep(for: .milliseconds(400))
+
+    let sidebar = controller.browser.sidebar
+    _ = sidebar.view
+    #expect(sidebar.debugRowCount >= 8)
+    let titles = (0..<sidebar.debugRowCount).compactMap { sidebar.debugTitle(atRow: $0) }
+    #expect(titles.contains("FAVORITES"))
+    #expect(titles.contains("Home"))
+    #expect(titles.contains("This Mac"))
+    #expect(sidebar.view.frame.width >= 150)
 }

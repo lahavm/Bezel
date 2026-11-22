@@ -25,6 +25,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.servicesProvider = FinderServiceProvider.shared
         NSUpdateDynamicServices()
+
+        // Replace the default "Bezel Help" item (which shows the system's
+        // "Help is not available" message) with our own help window.
+        let menu = NSMenu()
+        let item = NSMenuItem(title: "Bezel Help", action: #selector(showHelp(_:)), keyEquivalent: "?")
+        item.target = self
+        menu.addItem(item)
+        NSApp.helpMenu = menu
+    }
+
+    @objc private func showHelp(_ sender: Any) {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
+        HelpPanel.show(version: version)
     }
 }
 
@@ -35,21 +48,17 @@ struct BezelApp: App {
 
     var body: some Scene {
         WindowGroup("Bezel") {
-            ContentView()
+            RootView()
                 .environment(state)
                 .frame(minWidth: 880, minHeight: 560)
-                .task {
-                    FilesCoordinator.shared.attach(state)
-                    if ProcessInfo.processInfo.environment["BEZEL_OPEN_FILES"] == "1" {
-                        FilesCoordinator.shared.open(asTab: false)
-                    }
-                }
         }
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Files") { openFiles(asTab: true) }
-                    .keyboardShortcut("b", modifiers: .command)
+                Button("Files") {
+                    NotificationCenter.default.post(name: .toggleFilesTab, object: nil)
+                }
+                .keyboardShortcut("b", modifiers: .command)
                 Button("Files in New Window") { openFiles(asTab: false) }
                     .keyboardShortcut("b", modifiers: [.command, .shift])
             }
@@ -90,20 +99,20 @@ struct BezelApp: App {
                 .disabled(!state.isRunning && !state.canConnect)
             }
             CommandMenu("Files") {
-                Button("New Folder") { FilesCoordinator.shared.activeWindow()?.newFolder() }
+                Button("New Folder") { FilesCoordinator.shared.activeFiles()?.newFolder() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
-                Button("Rename") { FilesCoordinator.shared.activeWindow()?.rename() }
-                Button("Move to Trash / Delete") { FilesCoordinator.shared.activeWindow()?.delete() }
+                Button("Rename") { FilesCoordinator.shared.activeFiles()?.rename() }
+                Button("Move to Trash / Delete") { FilesCoordinator.shared.activeFiles()?.delete() }
                     .keyboardShortcut(.delete, modifiers: .command)
-                Button("Quick Look") { FilesCoordinator.shared.activeWindow()?.quickLookSelection() }
+                Button("Quick Look") { FilesCoordinator.shared.activeFiles()?.quickLookSelection() }
                 Divider()
-                Button("Split Panes") { FilesCoordinator.shared.activeWindow()?.toggleSplitView() }
+                Button("Split Panes") { FilesCoordinator.shared.activeFiles()?.toggleSplitView() }
                     .keyboardShortcut("2", modifiers: [.command, .shift])
-                Button("Show Preview") { FilesCoordinator.shared.activeWindow()?.togglePreviewPane() }
+                Button("Show Preview") { FilesCoordinator.shared.activeFiles()?.togglePreviewPane() }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
-                Button("Show Hidden Files") { FilesCoordinator.shared.activeWindow()?.toggleHiddenFiles() }
+                Button("Show Hidden Files") { FilesCoordinator.shared.activeFiles()?.toggleHiddenFiles() }
                     .keyboardShortcut(".", modifiers: [.command, .shift])
-                Button("Refresh") { FilesCoordinator.shared.activeWindow()?.refreshPanes() }
+                Button("Refresh") { FilesCoordinator.shared.activeFiles()?.refreshPanes() }
                     .keyboardShortcut("r", modifiers: .command)
             }
             CommandGroup(after: .help) {
@@ -118,6 +127,6 @@ struct BezelApp: App {
 
     private func openFiles(asTab: Bool) {
         FilesCoordinator.shared.attach(state)
-        FilesCoordinator.shared.open(asTab: asTab)
+        FilesCoordinator.shared.showFiles(asTab: asTab)
     }
 }

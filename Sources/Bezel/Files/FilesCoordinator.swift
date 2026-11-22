@@ -17,10 +17,12 @@ struct FileLocation: Identifiable, Hashable, Sendable {
 final class FilesCoordinator {
     static let shared = FilesCoordinator()
 
-    private(set) var windows: [FilesWindowController] = []
+    private(set) var files: FilesTabController?
+    /// Mirror or Files tab in the shared window; set by `RootView`.
+    var filesTabIsVisible = false
+    private var detachedWindows: [NSWindow] = []
     private var remoteBackends: [String: ADBBackend] = [:]
     private weak var state: AppState?
-    private weak var mirrorWindow: NSWindow?
     let local = LocalBackend()
     var lastPhoneDirectory = "/sdcard/Download"
     var statusMessage: String?
@@ -30,7 +32,6 @@ final class FilesCoordinator {
 
     func attach(_ state: AppState) {
         self.state = state
-        if mirrorWindow == nil { mirrorWindow = findMirrorWindow() }
         if state.devices.isEmpty { Task { await state.refresh() } }
         if let pendingSend {
             self.pendingSend = nil
@@ -101,83 +102,54 @@ final class FilesCoordinator {
         return locations
     }
 
-    // MARK: - Windows
+    // MARK: - Files tab
 
-    func open(backendID: String? = nil, path: String? = nil, asTab: Bool = true) {
+    /// The Files browser is a tab inside the single Bezel window, so ⌘B only
+    /// switches to it. It never creates or moves a window.
+    func showFiles(backendID: String? = nil, path: String? = nil, asTab: Bool = true) {
+        if asTab {
+            let tab = filesTab(backendID: backendID, path: path)
+            if let backendID, let path, let backend = backend(for: backendID) {
+                tab.browser.primaryPane.navigate(to: backend, path: path, recordHistory: false)
+            }
+            NotificationCenter.default.post(name: .bezelShowFiles, object: nil)
+        } else {
+            detachedWindows.removeAll { !$0.isVisible }
+            let tab = makeFiles(backendID: backendID, path: path)
+            let window = NSWindow(contentViewController: tab)
+            window.title = "Files"
+            window.contentMinSize = NSSize(width: 760, height: 460)
+            window.setContentSize(NSSize(width: 1080, height: 700))
+            window.tabbingMode = .disallowed
+            window.center()
+            detachedWindows.append(window)
+            window.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    @discardableResult
+    func filesTab(backendID: String? = nil, path: String? = nil) -> FilesTabController {
+        if let files { return files }
+        let tab = makeFiles(backendID: backendID, path: path)
+        files = tab
+        return tab
+    }
+
+    private func makeFiles(backendID: String?, path: String?) -> FilesTabController {
         let initialBackend = backendID.flatMap { backend(for: $0) } ?? local
-        let settings = state?.settings
-        let resolvedPath = path ?? settings?.filesLastPaths[initialBackend.id] ?? initialBackend.defaultPath
-
-        // ⌘B should always come back to the same Files tab. Creating a new
-        // window each time filled the mirror window's tab bar with duplicates.
-        if asTab, let existing = windows.first(where: { $0.window?.isVisible == true }) {
-            if let main = mainMirrorWindow(),
-               let filesWindow = existing.window,
-               main.tabbedWindows?.contains(filesWindow) != true,
-               !main.styleMask.contains(.fullScreen) {
-                filesWindow.tabbingIdentifier = main.tabbingIdentifier
-                main.addTabbedWindow(filesWindow, ordered: .above)
-            }
-            existing.window?.makeKeyAndOrderFront(nil)
-            if let path {
-                existing.browser.primaryPane.navigate(to: initialBackend, path: path)
-            }
-            setConflictHandler(for: existing)
-            return
+        let resolvedPath = path ?? settings.filesLastPaths[initialBackend.id] ?? initialBackend.defaultPath
+        let tab = FilesTabController(backend: initialBackend, path: resolvedPath, coordinator: self)
+        TransferCenter.shared.conflictHandler = { [weak tab] conflict in
+            await tab?.resolve(conflict) ?? (.keepBoth, false)
         }
-
-        let controller = FilesWindowController(
-            backend: initialBackend,
-            path: resolvedPath,
-            coordinator: self
-        )
-        windows.append(controller)
-        controller.showWindow(nil)
-        controller.window?.makeKeyAndOrderFront(nil)
-
-        if asTab,
-           let main = mainMirrorWindow(),
-           !main.styleMask.contains(.fullScreen),
-           let filesWindow = controller.window {
-            // AppKit requires matching identifiers (including both nil) before
-            // it will merge a window into another window's tab bar.
-            filesWindow.tabbingIdentifier = main.tabbingIdentifier
-            main.addTabbedWindow(filesWindow, ordered: .above)
-        }
-
-        setConflictHandler(for: controller)
+        return tab
     }
 
-    private func setConflictHandler(for controller: FilesWindowController) {
-        TransferCenter.shared.conflictHandler = { [weak controller] conflict in
-            await controller?.resolve(conflict) ?? (.keepBoth, false)
-        }
-    }
-
-    func windowDidClose(_ controller: FilesWindowController) {
-        windows.removeAll { $0 === controller }
-    }
-
-    func activeWindow() -> FilesWindowController? {
-        if let key = NSApp.keyWindow?.windowController as? FilesWindowController { return key }
-        return windows.first { $0.window?.isVisible == true }
-    }
-
-    /// Never key off the window title: once Files is the selected tab, the
-    /// shared window is titled "Files" and looking for "Bezel" creates another
-    /// Files window on every ⌘B.
-    private func mainMirrorWindow() -> NSWindow? {
-        if let mirrorWindow, mirrorWindow.isVisible { return mirrorWindow }
-        mirrorWindow = findMirrorWindow()
-        return mirrorWindow
-    }
-
-    private func findMirrorWindow() -> NSWindow? {
-        NSApp.windows.first {
-            !($0.windowController is FilesWindowController)
-                && $0.frame.width > 800
-                && $0.contentView != nil
-        }
+    /// Menu commands act on the key Files window when one is detached,
+    /// otherwise on the in-window Files tab.
+    func activeFiles() -> FilesTabController? {
+        if let key = NSApp.keyWindow?.contentViewController as? FilesTabController { return key }
+        return filesTabIsVisible ? files : nil
     }
 
     // MARK: - Drop on the mirror / Finder Service
@@ -207,7 +179,7 @@ final class FilesCoordinator {
                 directory: lastPhoneDirectory
             )
             state?.showToast("Sending \(items.count) item\(items.count == 1 ? "" : "s") to \(device.displayName)")
-            open(backendID: backend.id, path: lastPhoneDirectory, asTab: true)
+            showFiles(backendID: backend.id, path: lastPhoneDirectory)
         }
     }
 

@@ -153,164 +153,186 @@ final class TransfersViewController: NSViewController, NSTableViewDataSource, NS
     }
 }
 
+/// The Files tab: a compact control row plus the browser. It lives inside the
+/// single Bezel window, so no window tabbing (and no window jumping) is needed.
 @MainActor
-final class FilesWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate, NSSearchFieldDelegate {
+final class FilesTabController: NSViewController, NSSearchFieldDelegate {
     let browser: FilesBrowserController
     private let coordinator: FilesCoordinator
     private let transfers = TransfersViewController()
     private let popover = NSPopover()
     private var quickLookContext: QuickLookContext?
+
+    private var backForward: NSSegmentedControl!
+    private var viewMode: NSSegmentedControl!
+    private var sortPop: NSPopUpButton!
+    private var searchField: NSSearchField!
     private var transferButton: NSButton!
 
     init(backend: any FileBackend, path: String, coordinator: FilesCoordinator) {
         self.coordinator = coordinator
         self.browser = FilesBrowserController(backend: backend, path: path)
-        super.init(window: nil)
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1080, height: 700),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "Files"
-        window.minSize = NSSize(width: 760, height: 460)
-        window.toolbarStyle = .unified
-        window.tabbingMode = .preferred
-        window.tabbingIdentifier = "com.lahav.bezel.files"
-        window.setFrameAutosaveName("BezelFiles")
-        window.delegate = self
-        self.window = window
-
+        super.init(nibName: nil, bundle: nil)
         browser.windowController = self
-        window.contentViewController = browser
+    }
 
-        let toolbar = NSToolbar(identifier: "BezelFilesToolbar")
-        toolbar.delegate = self
-        toolbar.displayMode = .iconOnly
-        window.toolbar = toolbar
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been used") }
+
+    override func loadView() {
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 1080, height: 700))
+        let header = makeHeader()
+
+        addChild(browser)
+        let content = browser.view
+        content.translatesAutoresizingMaskIntoConstraints = false
+        header.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(header)
+        container.addSubview(content)
+
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: container.topAnchor),
+            header.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            header.heightAnchor.constraint(equalToConstant: 38),
+
+            content.topAnchor.constraint(equalTo: header.bottomAnchor),
+            content.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            content.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        ])
+        view = container
 
         popover.contentViewController = transfers
         popover.behavior = .transient
         popover.contentSize = NSSize(width: 380, height: 260)
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been used") }
-
-    func windowWillClose(_ notification: Notification) {
-        coordinator.windowDidClose(self)
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        syncControls()
     }
 
-    // MARK: - Toolbar
+    // MARK: - Header
 
-    private func id(_ name: String) -> NSToolbarItem.Identifier {
-        NSToolbarItem.Identifier(name)
-    }
+    private func makeHeader() -> NSView {
+        backForward = NSSegmentedControl(
+            images: [
+                NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "Back")!,
+                NSImage(systemSymbolName: "chevron.right", accessibilityDescription: "Forward")!
+            ],
+            trackingMode: .momentary,
+            target: self,
+            action: #selector(goBackForward(_:))
+        )
+        backForward.setWidth(30, forSegment: 0)
+        backForward.setWidth(30, forSegment: 1)
 
-    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [id("backForward"), id("viewMode"), id("sort"), id("newFolder"), id("transfers"),
-         id("search"), id("more"), .flexibleSpace, .space]
-    }
+        viewMode = NSSegmentedControl(
+            images: [
+                NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: "Icons")!,
+                NSImage(systemSymbolName: "list.bullet", accessibilityDescription: "List")!
+            ],
+            trackingMode: .selectOne,
+            target: self,
+            action: #selector(viewModeChanged(_:))
+        )
+        viewMode.setWidth(30, forSegment: 0)
+        viewMode.setWidth(30, forSegment: 1)
 
-    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [id("backForward"), id("viewMode"), id("sort"), id("newFolder"), .flexibleSpace,
-         id("transfers"), id("search"), id("more")]
-    }
+        sortPop = NSPopUpButton(frame: .zero, pullsDown: false)
+        sortPop.addItems(withTitles: FileSortKey.allCases.map(\.label))
+        sortPop.target = self
+        sortPop.action = #selector(sortChanged(_:))
+        sortPop.translatesAutoresizingMaskIntoConstraints = false
 
-    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
-                 willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        switch itemIdentifier.rawValue {
-        case "backForward":
-            let control = NSSegmentedControl(
-                images: [
-                    NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "Back")!,
-                    NSImage(systemSymbolName: "chevron.right", accessibilityDescription: "Forward")!
-                ],
-                trackingMode: .momentary,
-                target: self,
-                action: #selector(goBackForward(_:))
-            )
-            control.setWidth(34, forSegment: 0)
-            control.setWidth(34, forSegment: 1)
-            return item(itemIdentifier, title: "History", view: control)
-        case "viewMode":
-            let control = NSSegmentedControl(
-                images: [
-                    NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: "Icons")!,
-                    NSImage(systemSymbolName: "list.bullet", accessibilityDescription: "List")!
-                ],
-                trackingMode: .selectOne,
-                target: self,
-                action: #selector(viewModeChanged(_:))
-            )
-            control.setWidth(34, forSegment: 0)
-            control.setWidth(34, forSegment: 1)
-            control.selectedSegment = coordinator.settings.filesViewMode == .list ? 1 : 0
-            return item(itemIdentifier, title: "View", view: control)
-        case "sort":
-            let pop = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 140, height: 24), pullsDown: true)
-            pop.addItems(withTitles: FileSortKey.allCases.map(\.label))
-            pop.selectItem(at: FileSortKey.allCases.firstIndex(of: coordinator.settings.filesSortKey) ?? 0)
-            pop.target = self
-            pop.action = #selector(sortChanged(_:))
-            return item(itemIdentifier, title: "Sort", view: pop)
-        case "newFolder":
-            let button = NSButton(image: NSImage(systemSymbolName: "folder.badge.plus", accessibilityDescription: "New Folder")!,
-                                  target: self, action: #selector(newFolder(_:)))
-            button.bezelStyle = .texturedRounded
-            return item(itemIdentifier, title: "New Folder", view: button)
-        case "transfers":
-            let button = NSButton(image: NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: "Transfers")!,
-                                  target: self, action: #selector(showTransfers(_:)))
-            button.bezelStyle = .texturedRounded
-            transferButton = button
-            NotificationCenter.default.addObserver(
-                forName: .bezelTransfersChanged, object: nil, queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.updateTransferButton() }
-            }
-            return item(itemIdentifier, title: "Transfers", view: button)
-        case "search":
-            let field = NSSearchField(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
-            field.placeholderString = "Search"
-            field.delegate = self
-            field.target = self
-            field.action = #selector(searchChanged(_:))
-            return item(itemIdentifier, title: "Search", view: field)
-        case "more":
-            let pop = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 28, height: 24), pullsDown: true)
-            let menu = NSMenu()
-            let options = [
-                ("Split Panes", #selector(toggleSplit)),
-                ("Show Preview", #selector(togglePreview)),
-                ("Show Hidden Files", #selector(toggleHidden)),
-                ("Refresh", #selector(refresh)),
-                ("Files in New Window", #selector(newWindow))
-            ]
-            for (index, option) in options.enumerated() {
-                let menuItem = NSMenuItem(title: option.0, action: option.1, keyEquivalent: "")
-                menuItem.target = self
-                menuItem.tag = index
-                menu.addItem(menuItem)
-            }
-            pop.menu = menu
-            pop.bezelStyle = .texturedRounded
-            return item(itemIdentifier, title: "More", view: pop)
-        default:
-            return nil
+        let newFolder = NSButton(
+            image: NSImage(systemSymbolName: "folder.badge.plus", accessibilityDescription: "New Folder")!,
+            target: self,
+            action: #selector(newFolder(_:))
+        )
+        newFolder.bezelStyle = .rounded
+        newFolder.toolTip = "New Folder"
+
+        transferButton = NSButton(
+            image: NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: "Transfers")!,
+            target: self,
+            action: #selector(showTransfers(_:))
+        )
+        transferButton.bezelStyle = .rounded
+        transferButton.toolTip = "Transfers"
+        NotificationCenter.default.addObserver(
+            forName: .bezelTransfersChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.updateTransferButton() }
         }
+
+        searchField = NSSearchField()
+        searchField.placeholderString = "Search"
+        searchField.delegate = self
+        searchField.target = self
+        searchField.action = #selector(searchChanged(_:))
+        searchField.sendsSearchStringImmediately = true
+
+        let more = NSButton(
+            image: NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "More")!,
+            target: self,
+            action: #selector(showMore(_:))
+        )
+        more.bezelStyle = .rounded
+        more.toolTip = "More"
+
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        let stack = NSStackView(views: [
+            backForward, viewMode, sortPop, newFolder,
+            spacer, transferButton, searchField, more
+        ])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let header = NSView()
+        let line = NSBox()
+        line.boxType = .separator
+        line.translatesAutoresizingMaskIntoConstraints = false
+        header.addSubview(stack)
+        header.addSubview(line)
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: header.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: header.bottomAnchor, constant: -1),
+
+            searchField.widthAnchor.constraint(equalToConstant: 180),
+            sortPop.widthAnchor.constraint(equalToConstant: 120),
+
+            line.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            line.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            line.bottomAnchor.constraint(equalTo: header.bottomAnchor),
+            line.heightAnchor.constraint(equalToConstant: 1)
+        ])
+        return header
     }
 
-    private func item(_ identifier: NSToolbarItem.Identifier, title: String, view: NSView) -> NSToolbarItem {
-        let item = NSToolbarItem(itemIdentifier: identifier)
-        item.label = title
-        item.paletteLabel = title
-        item.view = view
-        item.minSize = NSSize(width: 28, height: 24)
-        return item
+    private func syncControls() {
+        viewMode.selectedSegment = coordinator.settings.filesViewMode == .list ? 1 : 0
+        if let index = FileSortKey.allCases.firstIndex(of: coordinator.settings.filesSortKey) {
+            sortPop.selectItem(at: index)
+        }
+        updateTransferButton()
     }
 
-    // MARK: - Toolbar actions
+    private func updateTransferButton() {
+        let active = TransferCenter.shared.activeCount
+        transferButton?.contentTintColor = active > 0 ? .controlAccentColor : nil
+        transferButton?.toolTip = active > 0 ? "\(active) transfer\(active == 1 ? "" : "s") in progress" : "Transfers"
+    }
+
+    // MARK: - Actions
 
     @objc private func goBackForward(_ control: NSSegmentedControl) {
         if control.selectedSegment == 0 { browser.activePane.goBack() } else { browser.activePane.goForward() }
@@ -343,15 +365,33 @@ final class FilesWindowController: NSWindowController, NSWindowDelegate, NSToolb
         browser.activePane.setSearch(field.stringValue)
     }
 
-    private func updateTransferButton() {
-        let active = TransferCenter.shared.activeCount
-        transferButton?.contentTintColor = active > 0 ? .controlAccentColor : nil
-        transferButton?.toolTip = active > 0 ? "\(active) transfer\(active == 1 ? "" : "s") in progress" : "Transfers"
-    }
-
     @objc private func showTransfers(_ sender: NSButton) {
         transfers.reload()
         popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+    }
+
+    @objc private func showMore(_ sender: NSButton) {
+        let menu = NSMenu()
+        let options: [(String, Selector, Bool)] = [
+            ("Split Panes", #selector(toggleSplit), coordinator.settings.filesSplit),
+            ("Show Preview", #selector(togglePreview), coordinator.settings.filesShowPreview),
+            ("Show Hidden Files", #selector(toggleHidden), coordinator.settings.filesShowHidden)
+        ]
+        for (title, action, on) in options {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.state = on ? .on : .off
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let refreshItem = NSMenuItem(title: "Refresh", action: #selector(refresh(_:)), keyEquivalent: "")
+        refreshItem.target = self
+        menu.addItem(refreshItem)
+        let newWindow = NSMenuItem(title: "Files in New Window", action: #selector(newWindow(_:)), keyEquivalent: "")
+        newWindow.target = self
+        menu.addItem(newWindow)
+
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 2), in: sender)
     }
 
     @objc private func toggleSplit() { browser.setSplit(!coordinator.settings.filesSplit) }
@@ -362,8 +402,8 @@ final class FilesWindowController: NSWindowController, NSWindowDelegate, NSToolb
         browser.refreshAll()
     }
 
-    @objc private func newWindow() {
-        coordinator.open(
+    @objc private func newWindow(_ sender: Any) {
+        coordinator.showFiles(
             backendID: browser.activePane.backend.id,
             path: browser.activePane.path,
             asTab: false
@@ -383,7 +423,7 @@ final class FilesWindowController: NSWindowController, NSWindowDelegate, NSToolb
             alert.addButton(withTitle: "Skip")
             let checkbox = NSButton(checkboxWithTitle: "Apply to all", target: nil, action: nil)
             alert.accessoryView = checkbox
-            guard let window else {
+            guard let window = view.window else {
                 continuation.resume(returning: (.keepBoth, false))
                 return
             }

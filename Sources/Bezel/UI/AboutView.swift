@@ -24,6 +24,35 @@ struct AboutView: View {
                 .padding(.top, 10)
                 .padding(.horizontal, 20)
 
+            VStack(spacing: 6) {
+                Text("Features:")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Image(systemName: "iphone.gen3")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.secondary)
+                    Text("Mirror")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.primary)
+                    Image(systemName: "folder")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.secondary)
+                    Text("Files")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.primary)
+                }
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.secondary)
+                    Text("Transfers")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.primary)
+                }
+            }
+            .padding(.top, 4)
+
             HStack(spacing: 18) {
                 Link("Source on GitHub", destination: githubURL)
                     .font(.subheadline)

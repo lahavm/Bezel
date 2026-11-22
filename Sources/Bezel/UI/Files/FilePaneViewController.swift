@@ -214,8 +214,12 @@ final class FilePaneViewController: NSViewController {
         iconView.onCanDrop = { [weak self] in self?.canAccept($0) ?? false }
         iconView.onDrop = { [weak self] in self?.acceptDrop($0, row: nil) ?? false }
         iconView.registerForDraggedTypes([.fileURL])
+        iconView.setDraggingSourceOperationMask(.copy, forLocal: false)
+        iconView.setDraggingSourceOperationMask(.copy, forLocal: true)
         iconView.menu = contextMenu
         listView.registerForDraggedTypes([.fileURL])
+        listView.setDraggingSourceOperationMask(.copy, forLocal: false)
+        listView.setDraggingSourceOperationMask(.copy, forLocal: true)
 
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
@@ -269,10 +273,9 @@ final class FilePaneViewController: NSViewController {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                let recentlyFinished = TransferCenter.shared.jobs.contains {
-                    !$0.state.isActive && ($0.finished?.timeIntervalSinceNow ?? -100) > -2
-                }
-                if recentlyFinished { self.load() }
+                // Always reload when transfer state changes so the file list
+                // updates immediately after drag‑drop, cancellations, etc.
+                self.load()
             }
         }
     }
@@ -621,6 +624,12 @@ final class FilePaneViewController: NSViewController {
 // MARK: - NSTableView
 
 extension FilePaneViewController: NSTableViewDataSource, NSTableViewDelegate {
+    func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession,
+                   endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        FilesDragSession.paths = nil
+        FilesDragSession.backendID = nil
+    }
+
     func numberOfRows(in tableView: NSTableView) -> Int { displayItems.count }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { 24 }
@@ -705,13 +714,6 @@ extension FilePaneViewController: NSTableViewDataSource, NSTableViewDelegate {
         let selected = selectedItems.contains(item) ? selectedItems : [item]
         FilesDragSession.backendID = backend.id
         FilesDragSession.paths = selected.map(\.path)
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(2))
-            if FilesDragSession.paths == selected.map(\.path) {
-                FilesDragSession.paths = nil
-                FilesDragSession.backendID = nil
-            }
-        }
         if backend.isRemote {
             let provider = FilePromiseProvider(
                 fileType: item.type.identifier,
@@ -782,6 +784,12 @@ extension FilePaneViewController: NSFilePromiseProviderDelegate {
 // MARK: - Icons
 
 extension FilePaneViewController: NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout {
+    func collectionView(_ collectionView: NSCollectionView, draggingSession session: NSDraggingSession,
+                        endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        FilesDragSession.paths = nil
+        FilesDragSession.backendID = nil
+    }
+
     func numberOfSections(in collectionView: NSCollectionView) -> Int { 1 }
 
     func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int {
@@ -870,7 +878,12 @@ extension FilePaneViewController: NSMenuDelegate {
     @objc private func menuReveal() { revealInFinder() }
 
     func canAccept(_ info: NSDraggingInfo) -> Bool {
-        if FilesDragSession.paths != nil { return true }
+        // Accept if we have drag session data (from table/collection view drag)
+        // with selected items and a valid backend.
+        if FilesDragSession.paths != nil, FilesDragSession.backendID != nil {
+            return true
+        }
+        // Accept if the pasteboard contains file URLs (for direct Finder drops)
         return info.draggingPasteboard.types?.contains(.fileURL) == true
     }
 

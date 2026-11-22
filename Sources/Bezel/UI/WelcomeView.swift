@@ -15,7 +15,7 @@ struct WelcomeView: View {
             Text("Welcome to Bezel")
                 .font(.system(size: 26, weight: .bold, design: .rounded))
 
-            Text("Mirror and record your Android phone on your Mac over USB — nothing is installed on the phone and no account is needed.")
+            Text("Mirror and record your Android phone on your Mac over USB — nothing is installed on the phone and no account is needed.\n\nYou can also browse this Mac and the phone's files in one window (⌘B).")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

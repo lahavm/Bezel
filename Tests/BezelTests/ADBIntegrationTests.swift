@@ -74,7 +74,6 @@ import Testing
     try "payload".write(to: nested.appendingPathComponent("data.txt"), atomically: true, encoding: .utf8)
 
     let remoteDirectory = "/sdcard/Download/BezelTransferTest-\(UUID().uuidString)"
-    defer { Task { @MainActor in _ = try? await backend.delete([remoteDirectory]) } }
 
     func waitForQueue() async throws {
         for _ in 0..<150 {
@@ -83,21 +82,29 @@ import Testing
         }
     }
 
-    let local = LocalBackend()
-    let folder = try await local.info(source.path)
-    TransferCenter.shared.enqueue(items: [folder], from: local, to: backend, directory: remoteDirectory)
-    try await waitForQueue()
+    do {
+        let local = LocalBackend()
+        let folder = try await local.info(source.path)
+        TransferCenter.shared.enqueue(items: [folder], from: local, to: backend, directory: remoteDirectory)
+        try await waitForQueue()
 
-    let remoteFile = FilePath.join(remoteDirectory, "source/nested/data.txt")
-    #expect(try await backend.exists(remoteFile))
-    let jobs = TransferCenter.shared.jobs.filter { $0.destinationDirectory == remoteDirectory }
-    #expect(jobs.allSatisfy { $0.state == .finished })
+        let remoteFile = FilePath.join(remoteDirectory, "source/nested/data.txt")
+        #expect(try await backend.exists(remoteFile))
+        let jobs = TransferCenter.shared.jobs.filter { $0.destinationDirectory == remoteDirectory }
+        #expect(jobs.allSatisfy { $0.state == .finished })
 
-    let remoteFolder = try await backend.info(FilePath.join(remoteDirectory, "source"))
-    TransferCenter.shared.enqueue(items: [remoteFolder], from: backend, to: local, directory: back.path)
-    try await waitForQueue()
+        let remoteFolder = try await backend.info(FilePath.join(remoteDirectory, "source"))
+        TransferCenter.shared.enqueue(items: [remoteFolder], from: backend, to: local, directory: back.path)
+        try await waitForQueue()
 
-    let returned = back.appendingPathComponent("source/nested/data.txt")
-    #expect(try String(contentsOf: returned, encoding: .utf8) == "payload")
+        let returned = back.appendingPathComponent("source/nested/data.txt")
+        #expect(try String(contentsOf: returned, encoding: .utf8) == "payload")
+    } catch {
+        try? await backend.delete([remoteDirectory])
+        throw error
+    }
+    // Always await cleanup: a fire-and-forget Task can outlive the test
+    // process and leave an undeletable test folder on the device.
     try await backend.delete([remoteDirectory])
+    #expect(try await backend.exists(remoteDirectory) == false)
 }

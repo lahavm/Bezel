@@ -8,7 +8,7 @@ final class FilesBrowserController: NSViewController {
     private(set) var activePane: FilePaneViewController
     let sidebar = SidebarController()
     let preview = FilePreviewPane()
-    weak var windowController: FilesWindowController?
+    weak var windowController: FilesTabController?
 
     private let outerSplit = NSSplitView()
     private let paneSplit = NSSplitView()
@@ -32,6 +32,7 @@ final class FilesBrowserController: NSViewController {
 
         center.addSubview(paneSplit)
         paneSplit.translatesAutoresizingMaskIntoConstraints = false
+        center.autoresizingMask = [.width, .height]
         NSLayoutConstraint.activate([
             paneSplit.leadingAnchor.constraint(equalTo: center.leadingAnchor),
             paneSplit.trailingAnchor.constraint(equalTo: center.trailingAnchor),
@@ -52,11 +53,13 @@ final class FilesBrowserController: NSViewController {
 
     override func viewDidAppear() {
         super.viewDidAppear()
-        guard outerSplit.subviews.count >= 2 else { return }
+        // Always re-apply layout when the view appears (important when reused as a tab)
         outerSplit.setPosition(220, ofDividerAt: 0)
         if FilesCoordinator.shared.settings.filesShowPreview, outerSplit.subviews.count >= 3 {
             outerSplit.setPosition(max(520, outerSplit.frame.width - 280), ofDividerAt: 1)
         }
+        // Ensure the center view resizes with the window
+        center.autoresizingMask = [.width, .height]
     }
 
     func activate(pane: FilePaneViewController?) {

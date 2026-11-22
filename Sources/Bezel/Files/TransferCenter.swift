@@ -156,7 +156,9 @@ final class TransferCenter {
         jobs[index].message = message
         jobs[index].finished = Date()
         jobs[index].speed = 0
-        postChange()
+        // Never throttle the terminal state: a dropped final notification left
+        // the destination pane stale until the user navigated away and back.
+        postChange(force: true)
     }
 
     private func resolveConflict(_ id: UUID, _ conflict: FileConflict) async -> ConflictChoice {
@@ -171,9 +173,9 @@ final class TransferCenter {
         return answer.0
     }
 
-    private func postChange() {
+    private func postChange(force: Bool = false) {
         let now = Date()
-        guard now.timeIntervalSince(lastNotification) > 0.15 else { return }
+        guard force || now.timeIntervalSince(lastNotification) > 0.15 else { return }
         lastNotification = now
         NotificationCenter.default.post(name: .bezelTransfersChanged, object: self)
     }
