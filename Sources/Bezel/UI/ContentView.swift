@@ -6,7 +6,6 @@ struct ContentView: View {
     @Environment(AppState.self) private var state
     @State private var isFullScreen = false
     @State private var showInspector = true
-    @State private var showInspectorLeft = false
     @State private var autoFoldedForRecording = false
 
     var body: some View {
@@ -18,8 +17,15 @@ struct ContentView: View {
                 Divider()
             }
             HStack(spacing: 0) {
+                if showsInspector, state.settings.inspectorPosition == .left {
+                    inspector(state: state)
+                        .frame(width: 286)
+                        .background(.regularMaterial)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                    Divider()
+                }
                 preview
-                if !isFullScreen, showInspector {
+                if showsInspector, state.settings.inspectorPosition == .right {
                     Divider()
                     inspector(state: state)
                         .frame(width: 286)
@@ -78,6 +84,9 @@ struct ContentView: View {
     private func toggleFullScreen() {
         NSApp.keyWindow?.toggleFullScreen(nil)
     }
+
+    /// The inspector has no place in full screen, where the controls are hidden.
+    private var showsInspector: Bool { !isFullScreen && showInspector }
 
     private func toggleInspector() {
         autoFoldedForRecording = false
@@ -192,7 +201,7 @@ struct ContentView: View {
             Button {
                 toggleInspector()
             } label: {
-                Image(systemName: "sidebar.right")
+                Image(systemName: state.settings.inspectorPosition == .left ? "sidebar.left" : "sidebar.right")
             }
             .buttonStyle(.borderless)
             .help(showInspector ? "Hide inspector (⌘\\)" : "Show inspector (⌘\\)")
@@ -284,7 +293,7 @@ struct ContentView: View {
                         .frame(height: 11)
                         .opacity(0.4)
 
-                    audioHUD
+                    AudioHUD()
                 }
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.white.opacity(0.85))
@@ -431,7 +440,7 @@ struct ContentView: View {
                     VolumeControl(
                         title: "Phone",
                         icon: "speaker.wave.2.fill",
-                        level: state.phoneLevel,
+                        meter: .phone,
                         volume: $state.settings.phoneVolume
                     )
                     Toggle("Hear phone on Mac", isOn: $state.settings.hearPhoneAudio)
@@ -442,7 +451,7 @@ struct ContentView: View {
                     VolumeControl(
                         title: "Mac microphone",
                         icon: "mic.fill",
-                        level: state.micLevel,
+                        meter: .mic,
                         volume: $state.settings.micVolume
                     )
                 }
@@ -536,11 +545,12 @@ struct ContentView: View {
                 .disabled(state.isRecording)
             }
 
-            Toggle(isOn: $showInspectorLeft) {
-    Text("Inspector on left")
-}
-                .help("Move the inspector to the left side of the screen")
-                .padding(.top, 4)
+            Picker("Inspector", selection: $state.settings.inspectorPosition) {
+                ForEach(Settings.InspectorPosition.allCases) { position in
+                    Text(position.rawValue).tag(position)
+                }
+            }
+            .pickerStyle(.segmented)
             Section("Quality") {
                 Picker("Resolution", selection: $state.settings.resolution) {
                     ForEach(Settings.Resolution.allCases) { resolution in
@@ -627,7 +637,7 @@ struct ContentView: View {
                     Button {
                         toggleInspector()
                     } label: {
-                        Image(systemName: "sidebar.right")
+                        Image(systemName: state.settings.inspectorPosition == .left ? "sidebar.left" : "sidebar.right")
                             .font(.system(size: 11, weight: .semibold))
                     }
                     .buttonStyle(.borderless)
@@ -640,9 +650,14 @@ struct ContentView: View {
             }
         }
     }
+}
 
-    @ViewBuilder
-    private var audioHUD: some View {
+/// Reads the live meter levels itself, so a 50–90 Hz level tick only redraws
+/// this capsule instead of re-laying out the whole window.
+private struct AudioHUD: View {
+    @Environment(AppState.self) private var state
+
+    var body: some View {
         if state.settings.audio == .none && !state.settings.macMic {
             HStack(spacing: 4) {
                 Image(systemName: "speaker.slash.fill")
@@ -719,10 +734,17 @@ private struct LevelMeter: View {
 }
 
 private struct VolumeControl: View {
+    enum Meter { case phone, mic }
+
+    @Environment(AppState.self) private var state
+
     let title: String
     let icon: String
-    let level: Float
+    let meter: Meter
     @Binding var volume: Double
+
+    /// Read inside this leaf view: a level tick must not invalidate `ContentView`.
+    private var level: Float { meter == .phone ? state.phoneLevel : state.micLevel }
 
     var body: some View {
         VStack(spacing: 5) {

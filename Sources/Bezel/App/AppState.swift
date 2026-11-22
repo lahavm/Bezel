@@ -36,7 +36,7 @@ final class AppState {
     var showWelcome = false
 
     var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.1"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.2"
     }
     var phoneLevel: Float = 0
     var micLevel: Float = 0
@@ -44,6 +44,9 @@ final class AppState {
     var microphones: [MicInfo] = []
 
     private var session: ScrcpySession?
+    /// The phone's original stay-awake setting, and which phone it came from so
+    /// it can be put back even after the device list has moved on.
+    private var stayAwake: (serial: String, before: String)?
     private var monitor: Task<Void, Never>?
     private var didAutoConnect = false
     private var lastDeviceLog = "unset"
@@ -279,6 +282,18 @@ final class AppState {
         frameSize = .zero
         isConnecting = true
         status = "Connecting…"
+
+        // A phone that hits its screen timeout stops producing frames, which
+        // looks like a frozen preview. Mirroring needs it awake (scrcpy's
+        // --stay-awake). 7 = AC|USB|wireless, because a USB-C hub can report AC.
+        if stayAwake == nil,
+           let before = try? await adb.shellCommand(
+               device.serial, "settings get global stay_on_while_plugged_in"
+           ) {
+            stayAwake = (device.serial, before)
+        }
+        _ = try? await adb.shellCommand(device.serial, "settings put global stay_on_while_plugged_in 7")
+        _ = try? await adb.shellCommand(device.serial, "input keyevent 224")
 
         let session = ScrcpySession(device: device, adb: adb)
         session.onSample = { [weak self, weak session] sample, isKeyframe in
@@ -648,6 +663,7 @@ final class AppState {
     }
 
     func disconnect() {
+        restoreStayAwake()
         if isRecording {
             Task { await stopRecording() }
         }
@@ -663,7 +679,23 @@ final class AppState {
         status = "Stopped"
     }
 
+    /// Put the phone's stay-awake setting back the way it was found.
+    ///
+    /// shortcut: skipped if the app is force-quit, the phone keeps the setting
+    /// until it is changed again; revisit if that turns out to annoy anyone.
+    private func restoreStayAwake() {
+        guard let stayAwake else { return }
+        self.stayAwake = nil
+        guard let value = Int(stayAwake.before.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
+        Task {
+            _ = try? await adb.shellCommand(
+                stayAwake.serial, "settings put global stay_on_while_plugged_in \(value)"
+            )
+        }
+    }
+
     private func finish(message: String?) {
+        restoreStayAwake()
         if isRecording {
             Task { await stopRecording() }
         }

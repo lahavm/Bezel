@@ -8,13 +8,13 @@ struct PreviewView: NSViewRepresentable {
     func makeNSView(context: Context) -> PreviewLayerView {
         let view = PreviewLayerView()
         view.state = state
-        view.wantsLayer = true
-        view.layer = layer
+        view.attach(layer)
         return view
     }
 
     func updateNSView(_ nsView: PreviewLayerView, context: Context) {
         nsView.state = state
+        nsView.attach(layer)
     }
 }
 
@@ -24,9 +24,50 @@ struct PreviewView: NSViewRepresentable {
 final class PreviewLayerView: NSView {
     weak var state: AppState?
 
+    /// SwiftUI builds this representable more than once and every copy shares the
+    /// one video layer. A layer can only live in one place, so it is hosted as a
+    /// sublayer and only by the copy that is in a window: a discarded copy would
+    /// otherwise take it from the on-screen view, which then freezes on the last
+    /// frame it composited. Re-hosted on every update as well, so a steal heals.
+    private weak var displayLayer: AVSampleBufferDisplayLayer?
+
     private var touching = false
     private var scrollX: CGFloat = 0
     private var scrollY: CGFloat = 0
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = true
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func attach(_ displayLayer: AVSampleBufferDisplayLayer) {
+        self.displayLayer = displayLayer
+        host()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        host()
+    }
+
+    override func layout() {
+        super.layout()
+        host()
+    }
+
+    private func host() {
+        guard let displayLayer, window != nil, let layer else { return }
+        if displayLayer.superlayer !== layer {
+            layer.addSublayer(displayLayer)
+            Log.write("preview: layer hosted \(Int(bounds.width))x\(Int(bounds.height))")
+        }
+        displayLayer.frame = bounds
+    }
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -113,6 +154,9 @@ final class PreviewLayerView: NSView {
 }
 
 
+/// Hosts the Mac camera layer with a real AppKit layer mask. A SwiftUI
+/// `clipShape` does not reliably clip a layer-backed `NSView`, so the heart and
+/// circle outlines are applied to the layer itself.
 /// Hosts the Mac camera layer with a real AppKit layer mask. A SwiftUI
 /// `clipShape` does not reliably clip a layer-backed `NSView`, so the heart and
 /// circle outlines are applied to the layer itself.

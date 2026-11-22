@@ -107,7 +107,7 @@ final class WebcamPreview: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         queue.async { [self] in
             guard session.isRunning else { return }
             session.stopRunning()
-            displayLayer.flushAndRemoveImage()
+            displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
             Log.write("preview: stopped")
         }
     }
@@ -163,11 +163,12 @@ final class WebcamPreview: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     }
 
     private func enqueue(_ sample: CMSampleBuffer) {
-        if displayLayer.status == .failed {
-            displayLayer.flush()
+        let renderer = displayLayer.sampleBufferRenderer
+        if renderer.status == .failed {
+            renderer.flush(removingDisplayedImage: true, completionHandler: nil)
         }
-        guard displayLayer.isReadyForMoreMediaData else { return }
-        displayLayer.enqueue(sample)
+        guard renderer.isReadyForMoreMediaData else { return }
+        renderer.enqueue(sample)
     }
 
     private static func displayCopy(sampleBuffer: CMSampleBuffer, pts: CMTime) -> CMSampleBuffer? {

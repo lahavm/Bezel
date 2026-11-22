@@ -157,6 +157,7 @@ Sources/Bezel/
   App/        AppState, entry point
   Core/       ADB wrapper, scrcpy session, parsers, preview, recorders, PiP/mix
   UI/         SwiftUI window and preview view
+Docs/         screenshots used by this README
 Resources/    Info.plist, app icon
 Vendor/       adb + scrcpy-server (downloaded, not committed)
 Scripts/      fetch-vendor.sh, build-app.sh
@@ -164,8 +165,10 @@ Scripts/      fetch-vendor.sh, build-app.sh
 
 ## Known limitations
 
+- macOS 26 or newer is required.
 - **Mouse & keyboard control** is opt-in and only works while mirroring the screen.
-  It reconnects automatically when turned on or off.
+  It reconnects automatically when turned on or off. Keyboard input sends
+  keycodes only: clipboard sync and IME composition are not forwarded.
 - The picture-in-picture overlay is written after recording stops, so a very long
   take takes a moment to finish.
 - Background blur uses person segmentation. It needs a visible person; when no
@@ -174,10 +177,6 @@ Scripts/      fetch-vendor.sh, build-app.sh
   readout shows what actually arrives.
 - Some phones expose only their main and front cameras, so ultrawide or tele
   lenses appear only when Android lists them.
-- macOS 26 or newer is required.
-- No touch, clipboard, or IME composition control (viewing and recording only).
-  Keyboard control sends keycodes only; modifier combos like Shift+letter work,
-  but system IME/composition text is not sent.
 
 ## Third-party software
 

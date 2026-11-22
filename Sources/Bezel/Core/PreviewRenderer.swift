@@ -21,7 +21,7 @@ final class PreviewRenderer {
             Log.write("renderer: failed \(error.localizedDescription)")
             renderer.flush(removingDisplayedImage: true, completionHandler: nil)
         }
-        renderer.enqueue(sample)
+        renderer.enqueue(retimed(sample))
 
         frameCount += 1
         let now = Date()
@@ -30,6 +30,27 @@ final class PreviewRenderer {
             frameCount = 0
             lastTick = now
         }
+    }
+
+    /// The phone stamps frames with its own uptime, which has nothing to do with
+    /// the Mac's clock. The layer schedules presentation by PTS, so it showed the
+    /// first frame and held the rest as not yet due. Re-stamp on the host clock,
+    /// exactly like the camera preview's samples.
+    private func retimed(_ sample: CMSampleBuffer) -> CMSampleBuffer {
+        var timing = CMSampleTimingInfo(
+            duration: CMTime(value: 1, timescale: 60),
+            presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
+            decodeTimeStamp: .invalid
+        )
+        var copy: CMSampleBuffer?
+        let status = CMSampleBufferCreateCopyWithNewTiming(
+            allocator: kCFAllocatorDefault,
+            sampleBuffer: sample,
+            sampleTimingEntryCount: 1,
+            sampleTimingArray: &timing,
+            sampleBufferOut: &copy
+        )
+        return status == noErr ? (copy ?? sample) : sample
     }
 
     /// The frame the preview is showing right now, already decoded by the
