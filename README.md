@@ -161,7 +161,6 @@ Sources/Bezel/
   App/        AppState, entry point
   Core/       ADB wrapper, scrcpy session, parsers, preview, recorders, PiP/mix
   UI/         SwiftUI window and preview view
-Docs/         screenshots used by this README
 Resources/    Info.plist, app icon
 Vendor/       adb + scrcpy-server (downloaded, not committed)
 Scripts/      fetch-vendor.sh, build-app.sh
